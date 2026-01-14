@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Host page (CMS simulation)</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; }
+      iframe { width: 100%; height: 85vh; border: 1px solid rgba(0,0,0,0.2); border-radius: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>Host page (CMS simulation)</h1>
+    <p>This demo is locked to audit: <strong>https://composer.showoff.asp.events/</strong></p>
+
+    <iframe id="dash" src="/"></iframe>
+
+    <script>
+      const iframe = document.getElementById("dash");
+
+      function reply(type, payload) {
+        if (iframe && iframe.contentWindow && typeof iframe.contentWindow.postMessage === "function") {
+          iframe.contentWindow.postMessage({ type: type, payload: payload }, "*");
+        }
+      }
+
+      async function runFixedAudit() {
+        const res = await fetch("http://localhost:8787/api/audit");
+        const json = await res.json();
+        if (!res.ok) throw new Error((json && json.error) || "Audit server error");
+        return json;
+      }
+
+      window.addEventListener("message", async (event) => {
+        if (!event.data) return;
+        if (event.data.type !== "PARENT_AUDIT_REQUEST") return;
+
+        try {
+          reply("PARENT_AUDIT_STATUS", { message: "Running Lighthouse audit…" });
+          const audit = await runFixedAudit();
+          reply("PARENT_AUDIT_RESULT", audit);
+        } catch (err) {
+          reply("PARENT_AUDIT_ERROR", { message: String((err && err.message) || err) });
+        }
+      });
+
+      window.addEventListener("load", function () {
+        setTimeout(async function () {
+          try {
+            reply("PARENT_AUDIT_STATUS", { message: "Running Lighthouse audit…" });
+            const audit = await runFixedAudit();
+            reply("PARENT_AUDIT_RESULT", audit);
+          } catch (err) {
+            reply("PARENT_AUDIT_ERROR", { message: String((err && err.message) || err) });
+          }
+        }, 10);
+      });
+    </script>
+
+  </body>
+</html>
