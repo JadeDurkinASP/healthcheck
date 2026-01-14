@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
 const PORT = process.env.PORT || 8787;
-const TARGET_URL = "https://composer.showoff.asp.events/";
+const TARGET_URL = "https://preview.showoff.asp.events/76D31108-FB34-3E33-C1D9567C544FD7D8/";
 
 function to100(v) {
   return typeof v === "number" ? Math.round(v * 100) : null;

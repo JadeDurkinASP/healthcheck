@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 
 const API_BASE = "https://healthcheck-vdll.onrender.com";
-const TARGET_URL = "https://composer.showoff.asp.events/";
+const TARGET_URL = "https://preview.showoff.asp.events/76D31108-FB34-3E33-C1D9567C544FD7D8/";
 
 function formatMs(ms) {
   if (typeof ms !== "number") return "–";
