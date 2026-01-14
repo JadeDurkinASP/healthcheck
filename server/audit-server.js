@@ -131,6 +131,8 @@ Return as Markdown.
   }
 });
 
+app.get("/health", (req, res) => res.json({ ok: true }));
+
 app.use((req, res) => {
   res.status(404).json({ error: `Not found: ${req.method} ${req.url}` });
 });
