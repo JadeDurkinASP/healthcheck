@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import lighthouse from "lighthouse";
 import { launch } from "chrome-launcher";
-import puppeteer from "puppeteer";
+import { chromium } from "playwright";
 
 const app = express();
 app.use(cors());
@@ -44,8 +44,14 @@ app.get("/api/audit", async (req, res) => {
 
   try {
     chrome = await launch({
-      chromePath: puppeteer.executablePath(),
-      chromeFlags: ["--headless=new", "--no-sandbox", "--disable-gpu"],
+    chromePath: chromium.executablePath(),
+    chromeFlags: [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+    ],
     });
 
     const result = await lighthouse(TARGET_URL, {
