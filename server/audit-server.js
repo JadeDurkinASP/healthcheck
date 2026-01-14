@@ -138,5 +138,5 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Audit server running on http://localhost:${PORT}`);
+  //console.log(`Audit server running on http://localhost:${PORT}`);
 });

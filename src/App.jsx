@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 
+const API_BASE = "https://healthcheck-vdll.onrender.com";
 const TARGET_URL = "https://composer.showoff.asp.events/";
-const PARENT_ORIGIN = "*";
 
 function formatMs(ms) {
   if (typeof ms !== "number") return "–";
@@ -21,43 +21,30 @@ export default function App() {
   const [aiRunning, setAiRunning] = useState(false);
   const [aiText, setAiText] = useState("");
 
-  useEffect(() => {
-    const onMsg = (event) => {
-      if (!event.data) return;
-
-      const { type, payload } = event.data;
-
-      if (type === "PARENT_AUDIT_STATUS") {
-        setStatus(payload?.message || "Working…");
-      }
-
-      if (type === "PARENT_AUDIT_RESULT") {
-        setAudit(payload);
-        setStatus("Done");
-        setError("");
-        setIsRunning(false);
-      }
-
-      if (type === "PARENT_AUDIT_ERROR") {
-        setError(payload?.message || "Parent reported an error.");
-        setStatus("Error");
-        setIsRunning(false);
-      }
-    };
-
-    window.addEventListener("message", onMsg);
-    return () => window.removeEventListener("message", onMsg);
-  }, []);
-
   const scores = useMemo(() => audit?.scores || {}, [audit]);
   const metrics = useMemo(() => audit?.metrics || {}, [audit]);
 
-  function runAudit() {
+  async function runAudit() {
     setError("");
-    setStatus("Requesting audit…");
-    setIsRunning(true);
     setAiText("");
-    window.parent?.postMessage({ type: "PARENT_AUDIT_REQUEST" }, "*");
+    setStatus("Running audit…");
+    setIsRunning(true);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/audit`, { cache: "no-store" });
+      const text = await res.text();
+      let json;
+      try { json = JSON.parse(text); } catch { json = null; }
+
+      if (!res.ok) throw new Error(json?.error || text || "Audit failed");
+      setAudit(json);
+      setStatus("Done");
+    } catch (e) {
+      setError(e?.message || String(e));
+      setStatus("Failed");
+    } finally {
+      setIsRunning(false);
+    }
   }
 
   async function getRecommendations() {
@@ -69,21 +56,25 @@ export default function App() {
       if (!audit) throw new Error("Run an audit first.");
       if (!openAiKey.trim()) throw new Error("Enter your OpenAI API key.");
 
-      const res = await fetch("http://localhost:8787/api/recommendations", {
+      const res = await fetch(`${API_BASE}/api/recommendations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          apiKey: openAiKey.trim(),
-          audit,
-        }),
+        body: JSON.stringify({ apiKey: openAiKey.trim(), audit }),
       });
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || "OpenAI request failed");
+      const text = await res.text();
+      let json;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        json = null;
+      }
 
-      setAiText(json.recommendations);
+      if (!res.ok) throw new Error(json?.error || text || "OpenAI request failed");
+
+      setAiText(json?.recommendations || "No recommendations returned.");
     } catch (e) {
-      setError(String(e?.message || e));
+      setError(e?.message || String(e));
     } finally {
       setAiRunning(false);
     }
@@ -92,7 +83,7 @@ export default function App() {
 
   return (
     <div className="container">
-      <h1 className="h1">Site Health Dashboard (Local Demo)</h1>
+      <h1 className="h1">Site Health Dashboard</h1>
       <p className="subtle">
         Locked to audit: <span className="badge">{TARGET_URL}</span>
       </p>
@@ -100,7 +91,7 @@ export default function App() {
       <div className="panel">
         <div className="grid2">
           <div>
-            <label className="label">Target URL (fixed)</label>
+            <label className="label">Target URL</label>
             <input className="input" value={TARGET_URL} readOnly />
           </div>
 
