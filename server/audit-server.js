@@ -1,8 +1,5 @@
 import express from "express";
 import cors from "cors";
-import lighthouse from "lighthouse";
-import { launch } from "chrome-launcher";
-import { chromium } from "playwright";
 
 const app = express();
 const ALLOWED_ORIGINS = [
@@ -61,56 +58,55 @@ function pickLabMetrics(lhr) {
 }
 
 app.get("/api/audit", async (req, res) => {
-  let chrome;
-
-  const timeoutMs = 90_000; 
-  const timeoutPromise = new Promise((_, reject) => {
-    setTimeout(() => reject(new Error(`Audit timed out after ${timeoutMs / 1000}s`)), timeoutMs);
-  });
-
   try {
-    chrome = await launch({
-      chromePath: chromium.executablePath(),
-      chromeFlags: [
-        "--headless=new",
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-      ],
-    });
+    const key = process.env.PSI_API_KEY;
+    if (!key) return res.status(500).json({ error: "Missing PSI_API_KEY env var" });
 
-    const auditPromise = lighthouse(
-      TARGET_URL,
-      {
-        port: chrome.port,
-        onlyCategories: ["performance", "accessibility"],
-        logLevel: "error",
-      },
-      {
-        maxWaitForLoad: 45_000,
-      }
-    );
+    const apiUrl =
+      "https://www.googleapis.com/pagespeedonline/v5/runPagespeed" +
+      `?url=${encodeURIComponent(TARGET_URL)}` +
+      `&key=${encodeURIComponent(key)}` +
+      `&category=performance&category=accessibility&category=best-practices&category=seo` +
+      `&strategy=desktop`;
 
-    const result = await Promise.race([auditPromise, timeoutPromise]);
+    const r = await fetch(apiUrl);
+    const data = await r.json();
 
-    const lhr = result.lhr;
+    if (!r.ok) {
+      return res.status(r.status).json({ error: data?.error?.message || JSON.stringify(data) });
+    }
+
+    const lhr = data?.lighthouseResult;
+    const cats = lhr?.categories || {};
+    const audits = lhr?.audits || {};
+
+    const to100 = (v) => (typeof v === "number" ? Math.round(v * 100) : null);
+    const n = (id) => (typeof audits[id]?.numericValue === "number" ? audits[id].numericValue : null);
 
     res.json({
       targetUrl: TARGET_URL,
-      requestedUrl: lhr.requestedUrl,
-      finalUrl: lhr.finalUrl,
-      fetchTime: lhr.fetchTime,
-      scores: pickScores(lhr),
-      metrics: pickLabMetrics(lhr),
+      requestedUrl: lhr?.requestedUrl,
+      finalUrl: lhr?.finalUrl,
+      fetchTime: lhr?.fetchTime,
+      scores: {
+        performance: to100(cats.performance?.score),
+        accessibility: to100(cats.accessibility?.score),
+        bestPractices: to100(cats["best-practices"]?.score),
+        seo: to100(cats.seo?.score),
+      },
+      metrics: {
+        fcpMs: n("first-contentful-paint"),
+        lcpMs: n("largest-contentful-paint"),
+        cls: n("cumulative-layout-shift"),
+        tbtMs: n("total-blocking-time"),
+        siMs: n("speed-index"),
+        ttfbMs: n("server-response-time"),
+      },
     });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
-  } finally {
-    if (chrome) await chrome.kill().catch(() => {});
   }
 });
-
 
 app.post("/api/recommendations", async (req, res) => {
   try {
@@ -176,10 +172,9 @@ Return as Markdown.
 
 app.get("/health", (req, res) => res.json({ ok: true }));
 
+app.get("/api/ping", (req, res) => res.json({ ok: true }));
+
 app.use((req, res) => {
   res.status(404).json({ error: `Not found: ${req.method} ${req.url}` });
 });
 
-app.listen(PORT, () => {
-  //console.log(`Audit server running on http://localhost:${PORT}`);
-});

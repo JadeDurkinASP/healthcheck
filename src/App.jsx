@@ -117,6 +117,8 @@ export default function App() {
           <div className="grid4" style={{ marginTop: 12 }}>
             <div className="kpi"><div className="t">Performance</div><div className="v">{scores.performance ?? "–"}</div></div>
             <div className="kpi"><div className="t">Accessibility</div><div className="v">{scores.accessibility ?? "–"}</div></div>
+            <div className="kpi"><div className="t">Best Practices</div><div className="v">{scores.bestPractices ?? "–"}</div></div>
+            <div className="kpi"><div className="t">SEO</div><div className="v">{scores.seo ?? "–"}</div></div>
           </div>
 
           <div className="panel" style={{ marginTop: 12 }}>
