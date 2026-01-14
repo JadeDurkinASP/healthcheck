@@ -148,9 +148,6 @@ export default function App() {
                 onChange={(e) => setOpenAiKey(e.target.value)}
                 placeholder="sk-…"
               />
-              <div className="subtle" style={{ marginTop: 6 }}>
-                For production, don&apos;t expose keys in the browser. Route via a backend.
-              </div>
             </div>
 
             <div>

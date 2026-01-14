@@ -78,23 +78,32 @@ app.get("/api/audit", async (req, res) => {
     const key = process.env.PSI_API_KEY;
     if (!key) return res.status(500).json({ error: "Missing PSI_API_KEY env var" });
 
-    const apiUrl =
-      "https://www.googleapis.com/pagespeedonline/v5/runPagespeed" +
-      `?url=${encodeURIComponent(TARGET_URL)}` +
-      `&key=${encodeURIComponent(key)}` +
-      `&category=performance&category=accessibility&category=best-practices&category=seo` +
-      `&strategy=desktop`;
+    const url = new URL("https://www.googleapis.com/pagespeedonline/v5/runPagespeed");
+    url.searchParams.set("url", TARGET_URL);
+    url.searchParams.set("key", key);
+    url.searchParams.set("strategy", "desktop");
+    url.searchParams.append("category", "performance");
+    url.searchParams.append("category", "accessibility");
+    url.searchParams.append("category", "best-practices");
+    url.searchParams.append("category", "seo");
 
-    const r = await fetch(apiUrl);
+    const r = await fetch(url.toString());
     const data = await r.json();
 
     if (!r.ok) {
-      return res
-        .status(r.status)
-        .json({ error: data?.error?.message || JSON.stringify(data) });
+      return res.status(r.status).json({
+        error: data?.error?.message || JSON.stringify(data),
+      });
     }
 
     const lhr = data?.lighthouseResult;
+
+    // If PSI ever returns a weird/partial payload, fail loudly (helps debugging)
+    if (!lhr?.categories) {
+      return res.status(500).json({
+        error: "No lighthouseResult.categories returned by PSI",
+      });
+    }
 
     res.json({
       targetUrl: TARGET_URL,
