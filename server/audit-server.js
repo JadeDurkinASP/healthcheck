@@ -5,7 +5,25 @@ import { launch } from "chrome-launcher";
 import { chromium } from "playwright";
 
 const app = express();
-app.use(cors());
+const ALLOWED_ORIGINS = [
+  "https://jadedurkinasp.github.io",
+  "http://localhost:5173",
+];
+
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
+      if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      return cb(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+app.options("*", cors());
+
 app.use(express.json({ limit: "1mb" }));
 
 const PORT = process.env.PORT || 8787;
