@@ -63,23 +63,36 @@ function pickLabMetrics(lhr) {
 app.get("/api/audit", async (req, res) => {
   let chrome;
 
+  const timeoutMs = 90_000; 
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(`Audit timed out after ${timeoutMs / 1000}s`)), timeoutMs);
+  });
+
   try {
     chrome = await launch({
-    chromePath: chromium.executablePath(),
-    chromeFlags: [
-      "--headless=new",
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-    ],
+      chromePath: chromium.executablePath(),
+      chromeFlags: [
+        "--headless=new",
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+      ],
     });
 
-    const result = await lighthouse(TARGET_URL, {
-      port: chrome.port,
-      onlyCategories: ["performance", "accessibility", "best-practices", "seo"],
-      logLevel: "error",
-    });
+    const auditPromise = lighthouse(
+      TARGET_URL,
+      {
+        port: chrome.port,
+        onlyCategories: ["performance", "accessibility"],
+        logLevel: "error",
+      },
+      {
+        maxWaitForLoad: 45_000,
+      }
+    );
+
+    const result = await Promise.race([auditPromise, timeoutPromise]);
 
     const lhr = result.lhr;
 
@@ -94,9 +107,10 @@ app.get("/api/audit", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
   } finally {
-    if (chrome) await chrome.kill();
+    if (chrome) await chrome.kill().catch(() => {});
   }
 });
+
 
 app.post("/api/recommendations", async (req, res) => {
   try {
