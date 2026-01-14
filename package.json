@@ -9,7 +9,8 @@
     "deploy": "gh-pages -d dist",
     "lint": "eslint .",
     "preview": "vite preview",
-    "audit-server": "node server/audit-server.js"
+    "audit-server": "node server/audit-server.js",
+    "start": "node server/audit-server.js"
   },
   "dependencies": {
     "axe-core": "^4.11.1",
