@@ -1,16 +1,31 @@
 import express from "express";
 import cors from "cors";
 
+process.on("uncaughtException", (err) => {
+  console.error("uncaughtException:", err);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("unhandledRejection:", reason);
+  process.exit(1);
+});
+
 const app = express();
+
 const ALLOWED_ORIGINS = [
   "https://jadedurkinasp.github.io",
   "http://localhost:5173",
 ];
 
+const PORT = process.env.PORT || 8787;
+const TARGET_URL =
+  "https://preview.showoff.asp.events/76D31108-FB34-3E33-C1D9567C544FD7D8/";
+
 app.use(
   cors({
     origin(origin, cb) {
-      if (!origin) return cb(null, true);
+      if (!origin) return cb(null, true); // non-browser requests
       if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked for origin: ${origin}`));
     },
@@ -26,15 +41,12 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "1mb" }));
 
-const PORT = process.env.PORT || 8787;
-const TARGET_URL = "https://preview.showoff.asp.events/76D31108-FB34-3E33-C1D9567C544FD7D8/";
-
 function to100(v) {
   return typeof v === "number" ? Math.round(v * 100) : null;
 }
 
 function pickScores(lhr) {
-  const c = lhr.categories || {};
+  const c = lhr?.categories || {};
   return {
     performance: to100(c.performance?.score),
     accessibility: to100(c.accessibility?.score),
@@ -44,8 +56,9 @@ function pickScores(lhr) {
 }
 
 function pickLabMetrics(lhr) {
-  const a = lhr.audits || {};
-  const n = (id) => (typeof a[id]?.numericValue === "number" ? a[id].numericValue : null);
+  const a = lhr?.audits || {};
+  const n = (id) =>
+    typeof a[id]?.numericValue === "number" ? a[id].numericValue : null;
 
   return {
     fcpMs: n("first-contentful-paint"),
@@ -56,6 +69,9 @@ function pickLabMetrics(lhr) {
     ttfbMs: n("server-response-time"),
   };
 }
+
+app.get("/api/ping", (req, res) => res.json({ ok: true }));
+app.get("/health", (req, res) => res.json({ ok: true }));
 
 app.get("/api/audit", async (req, res) => {
   try {
@@ -73,35 +89,20 @@ app.get("/api/audit", async (req, res) => {
     const data = await r.json();
 
     if (!r.ok) {
-      return res.status(r.status).json({ error: data?.error?.message || JSON.stringify(data) });
+      return res
+        .status(r.status)
+        .json({ error: data?.error?.message || JSON.stringify(data) });
     }
 
     const lhr = data?.lighthouseResult;
-    const cats = lhr?.categories || {};
-    const audits = lhr?.audits || {};
-
-    const to100 = (v) => (typeof v === "number" ? Math.round(v * 100) : null);
-    const n = (id) => (typeof audits[id]?.numericValue === "number" ? audits[id].numericValue : null);
 
     res.json({
       targetUrl: TARGET_URL,
       requestedUrl: lhr?.requestedUrl,
       finalUrl: lhr?.finalUrl,
       fetchTime: lhr?.fetchTime,
-      scores: {
-        performance: to100(cats.performance?.score),
-        accessibility: to100(cats.accessibility?.score),
-        bestPractices: to100(cats["best-practices"]?.score),
-        seo: to100(cats.seo?.score),
-      },
-      metrics: {
-        fcpMs: n("first-contentful-paint"),
-        lcpMs: n("largest-contentful-paint"),
-        cls: n("cumulative-layout-shift"),
-        tbtMs: n("total-blocking-time"),
-        siMs: n("speed-index"),
-        ttfbMs: n("server-response-time"),
-      },
+      scores: pickScores(lhr),
+      metrics: pickLabMetrics(lhr),
     });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
@@ -170,11 +171,10 @@ Return as Markdown.
   }
 });
 
-app.get("/health", (req, res) => res.json({ ok: true }));
-
-app.get("/api/ping", (req, res) => res.json({ ok: true }));
-
 app.use((req, res) => {
   res.status(404).json({ error: `Not found: ${req.method} ${req.url}` });
 });
 
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Audit server listening on ${PORT}`);
+});
