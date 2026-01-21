@@ -1,16 +1,151 @@
-# React + Vite
+# Site Health Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A lightweight **website health-check dashboard** built with **React + Vite** and a **Node audit server**.
 
-Currently, two official plugins are available:
+The app allows you to enter a public URL and run automated checks including:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+* Performance auditing via Lighthouse
+* Core Web Vitals metrics
+* Accessibility testing (axe-core)
 
-## React Compiler
+This project is designed to run **standalone** (not embedded in an iframe).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+---
 
-## Expanding the ESLint configuration
+## Tech Stack
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+**Frontend**
+
+* React
+* Vite
+* Web Vitals
+
+**Backend / Audit Engine**
+
+* Node.js
+* Express
+* Lighthouse
+* Chrome Launcher
+* axe-core
+
+---
+
+## Project Structure
+
+```
+/
+├─ index.html          # Vite entry HTML
+├─ main.jsx            # React bootstrap
+├─ App.jsx             # Main UI and logic
+├─ server/
+│  └─ audit-server.js  # Node server running Lighthouse & audits
+├─ package.json
+├─ vite.config.js
+└─ README.md
+```
+
+---
+
+## Requirements
+
+* **Node.js 18+** (Node 20 recommended)
+* npm
+* Google Chrome (for Lighthouse)
+
+Check your Node version:
+
+```
+node -v
+```
+
+---
+
+## Getting Started
+
+### 1. Install dependencies
+
+From the project root:
+
+```
+npm install
+```
+
+---
+
+### 2. Run the frontend (React UI)
+
+```
+npm run dev
+```
+
+The app will be available at:
+
+```
+http://localhost:5173
+```
+
+---
+
+### 3. Run the audit server (required for checks)
+
+In a separate terminal:
+
+```
+npm run start
+```
+
+or
+
+```
+node server/audit-server.js
+```
+
+This server:
+
+* Launches headless Chrome
+* Runs Lighthouse
+* Executes accessibility audits
+* Returns structured results to the frontend
+
+---
+
+## Typical Local Development Flow
+
+1. Start the audit server
+2. Start the Vite dev server
+3. Open the app in the browser
+4. Enter a URL
+5. View performance, vitals, and accessibility results
+
+Both servers must be running for full functionality.
+
+---
+
+## Build for Production
+
+```
+npm run build
+```
+
+This creates a static build in the configured output directory (used for GitHub Pages deployment).
+
+To preview the production build locally:
+
+```
+npm run preview
+```
+
+---
+
+## Linting
+
+```
+npm run lint
+```
+
+---
+
+## Notes & Limitations
+
+* URLs must be publicly accessible (no auth-gated pages)
+* Some sites may block automated audi

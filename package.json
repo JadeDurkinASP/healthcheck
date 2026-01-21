@@ -13,8 +13,10 @@
   },
   "dependencies": {
     "axe-core": "^4.11.1",
+    "cheerio": "^1.1.2",
     "chrome-launcher": "^1.2.1",
     "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "lighthouse": "^13.0.1",
     "playwright": "^1.57.0",

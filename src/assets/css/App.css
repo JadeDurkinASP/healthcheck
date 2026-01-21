@@ -11,6 +11,9 @@
   --good: #43f4b6;
   --focus: #8ab4ff;
   --radius: 14px;
+  --accent-green-start: rgba(0, 200, 140, 0.45);
+  --accent-green-end: rgba(0, 160, 120, 0.25);
+  --accent-green-border: rgba(0, 200, 140, 0.65);
 }
 
 body {
@@ -20,6 +23,7 @@ body {
   background: radial-gradient(1200px 700px at 10% 0%, rgba(88, 101, 242, 0.35), transparent 60%),
               radial-gradient(900px 600px at 90% 20%, rgba(67, 244, 182, 0.18), transparent 55%),
               var(--bg);
+  background-repeat: no-repeat;
   color: var(--text);
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
 }
@@ -149,3 +153,113 @@ pre {
   word-break: break-word;
   margin: 0;
 }
+
+/* Two-column layout: nav left, content right */
+.tabsLayout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .tabsLayout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Left rail */
+.tabsNav {
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.tabsNavTitle {
+  font-size: 14px;
+  opacity: 0.75;
+  margin: 0 0 10px;
+}
+
+/* Tab buttons: look like the screenshot */
+.tabsNavBtn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+
+  padding: 12px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.tabsNavBtn + .tabsNavBtn {
+  margin-top: 10px;
+}
+
+.tabsNavBtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.tabsNavBtn.isActive {
+  background: linear-gradient(
+    135deg,
+    var(--accent-green-start),
+    var(--accent-green-end)
+  );
+  border-color: var(--accent-green-border);
+  box-shadow:
+    0 0 0 3px rgba(0, 200, 140, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.tabsNavBtn.isActive .tabsNavChevron {
+  opacity: 1;
+}
+
+/* Little chevron on the right */
+.tabsNavChevron {
+  opacity: 0.7;
+  font-size: 18px;
+  margin-left: 12px;
+}
+
+/* Right content */
+.tabsContent {
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Header bar */
+.tabsContentHeader {
+  padding: 14px 16px;
+  background: linear-gradient(
+    135deg,
+    rgba(0, 200, 140, 0.18),
+    rgba(0, 160, 120, 0.08)
+  );
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.tabsContentTitle {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* Body */
+.tabsContentBody {
+  padding: 16px;
+}
+
