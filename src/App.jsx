@@ -22,23 +22,29 @@ function formatKb(bytes) {
 export default function App() {
   const [status, setStatus] = useState("Idle");
   const [error, setError] = useState("");
-  const [audit, setAudit] = useState(null);
+
+  // Two audit outputs:
+  // - psiAudit: PageSpeed Insights / Lighthouse
+  // - domAudit: Rendered DOM counts + ASP scoring
+  const [psiAudit, setPsiAudit] = useState(null);
+  const [domAudit, setDomAudit] = useState(null);
+
   const [isRunning, setIsRunning] = useState(false);
+
+  // AI
   const [openAiKey, setOpenAiKey] = useState("");
   const [aiRunning, setAiRunning] = useState(false);
   const [aiText, setAiText] = useState("");
-  const [aspRunning, setAspRunning] = useState(false);
-  const [aspError, setAspError] = useState("");
-  const [aspData, setAspData] = useState(null);
 
-  // Tabs: "crux" | "opps" | "diag" | "ai"
+  // Tabs: "crux" | "opps" | "diag" | "ai" | "asp"
   const [activeTab, setActiveTab] = useState("crux");
 
-  const scores = useMemo(() => audit?.scores || {}, [audit]);
-  const metrics = useMemo(() => audit?.metrics || {}, [audit]);
-  const fieldData = useMemo(() => audit?.fieldData || null, [audit]);
-  const opportunities = useMemo(() => audit?.opportunities || [], [audit]);
-  const diagnostics = useMemo(() => audit?.diagnostics || null, [audit]);
+  // PSI derived
+  const scores = useMemo(() => psiAudit?.scores || {}, [psiAudit]);
+  const metrics = useMemo(() => psiAudit?.metrics || {}, [psiAudit]);
+  const fieldData = useMemo(() => psiAudit?.fieldData || null, [psiAudit]);
+  const opportunities = useMemo(() => psiAudit?.opportunities || [], [psiAudit]);
+  const diagnostics = useMemo(() => psiAudit?.diagnostics || null, [psiAudit]);
 
   const hasCrux =
     typeof fieldData?.lcp?.percentile === "number" ||
@@ -47,7 +53,6 @@ export default function App() {
 
   const hasOpportunities = opportunities?.length > 0;
   const hasDiagnostics = Boolean(diagnostics);
-  const hasAiText = Boolean(aiText && aiText.trim());
 
   async function runAudit() {
     setError("");
@@ -55,35 +60,49 @@ export default function App() {
     setStatus("Running audit…");
     setIsRunning(true);
 
+    // clear previous results
+    setPsiAudit(null);
+    setDomAudit(null);
+
     try {
-      const res = await fetch(`${API_BASE}/api/audit`, { cache: "no-store" });
-      const text = await res.text();
-      let json;
+      const [psiRes, domRes] = await Promise.all([
+        fetch(`${API_BASE}/api/audit`, { cache: "no-store" }),
+        fetch(
+          `${API_BASE}/api/asp-recommendations?url=${encodeURIComponent(TARGET_URL)}`,
+          { cache: "no-store" }
+        ),
+      ]);
+
+      const [psiText, domText] = await Promise.all([psiRes.text(), domRes.text()]);
+
+      let psiJson = null;
+      let domJson = null;
+
       try {
-        json = JSON.parse(text);
+        psiJson = JSON.parse(psiText);
       } catch {
-        json = null;
+        psiJson = null;
+      }
+      try {
+        domJson = JSON.parse(domText);
+      } catch {
+        domJson = null;
       }
 
-      if (!res.ok) throw new Error(json?.error || text || "Audit failed");
+      if (!psiRes.ok) {
+        throw new Error(`PSI failed: ${psiJson?.error || psiText || psiRes.status}`);
+      }
+      if (!domRes.ok) {
+        throw new Error(`DOM audit failed: ${domJson?.error || domText || domRes.status}`);
+      }
 
-      setAudit(json);
+      setPsiAudit(psiJson);
+      setDomAudit(domJson);
+
       setStatus("Done");
 
-      // Pick a sensible default tab for the result
-      if (
-        typeof json?.fieldData?.lcp?.percentile === "number" ||
-        typeof json?.fieldData?.inp?.percentile === "number" ||
-        typeof json?.fieldData?.cls?.percentile === "number"
-      ) {
-        setActiveTab("crux");
-      } else if (json?.opportunities?.length) {
-        setActiveTab("opps");
-      } else if (json?.diagnostics) {
-        setActiveTab("diag");
-      } else {
-        setActiveTab("crux");
-      }
+      // Default to your rendered DOM audit view
+      setActiveTab("asp");
     } catch (e) {
       setError(e?.message || String(e));
       setStatus("Failed");
@@ -98,13 +117,13 @@ export default function App() {
     setAiRunning(true);
 
     try {
-      if (!audit) throw new Error("Run an audit first.");
+      if (!psiAudit) throw new Error("Run an audit first.");
       if (!openAiKey.trim()) throw new Error("Enter your OpenAI API key.");
 
       const res = await fetch(`${API_BASE}/api/recommendations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: openAiKey.trim(), audit }),
+        body: JSON.stringify({ apiKey: openAiKey.trim(), audit: psiAudit }),
       });
 
       const text = await res.text();
@@ -126,27 +145,7 @@ export default function App() {
     }
   }
 
-  async function runAspRecommendations() {
-    setAspError("");
-    setAspRunning(true);
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/asp-recommendations?url=${encodeURIComponent(TARGET_URL)}`,
-        { cache: "no-store" }
-      );
-      const text = await res.text();
-      let json;
-      try { json = JSON.parse(text); } catch { json = null; }
-
-      if (!res.ok) throw new Error(json?.error || text || "ASP recommendations failed");
-      setAspData(json);
-    } catch (e) {
-      setAspError(e?.message || String(e));
-    } finally {
-      setAspRunning(false);
-    }
-  }
-
+  const hasAnyAudit = Boolean(psiAudit || domAudit);
 
   return (
     <div className="container">
@@ -166,7 +165,7 @@ export default function App() {
             <label className="label">Actions</label>
             <div className="row">
               <button className="btn" onClick={runAudit} disabled={isRunning}>
-                {isRunning ? "Running…" : "Run audit"}
+                {isRunning ? "Running audit…" : "Run audit"}
               </button>
               <span className="badge">Status: {status}</span>
             </div>
@@ -180,43 +179,52 @@ export default function App() {
         </div>
       ) : null}
 
-      {audit ? (
+      {hasAnyAudit ? (
         <>
-          <div style={{ marginTop: 10 }} className="subtle">
-            Final URL: <span className="badge">{audit.finalUrl || "–"}</span>
-          </div>
+          {/* PSI headline blocks only if PSI exists */}
+          {psiAudit ? (
+            <>
+              <div style={{ marginTop: 10 }} className="subtle">
+                Final URL: <span className="badge">{psiAudit?.finalUrl || "-"}</span>
+              </div>
 
-          <div className="grid4" style={{ marginTop: 12 }}>
-            <div className="kpi">
-              <div className="t">Performance</div>
-              <div className="v">{scores.performance ?? "–"}</div>
-            </div>
-            <div className="kpi">
-              <div className="t">Accessibility</div>
-              <div className="v">{scores.accessibility ?? "–"}</div>
-            </div>
-            <div className="kpi">
-              <div className="t">Best Practices</div>
-              <div className="v">{scores.bestPractices ?? "–"}</div>
-            </div>
-            <div className="kpi">
-              <div className="t">SEO</div>
-              <div className="v">{scores.seo ?? "–"}</div>
-            </div>
-          </div>
+              <div className="grid4" style={{ marginTop: 12 }}>
+                <div className="kpi">
+                  <div className="t">Performance</div>
+                  <div className="v">{scores.performance ?? "–"}</div>
+                </div>
+                <div className="kpi">
+                  <div className="t">Accessibility</div>
+                  <div className="v">{scores.accessibility ?? "–"}</div>
+                </div>
+                <div className="kpi">
+                  <div className="t">Best Practices</div>
+                  <div className="v">{scores.bestPractices ?? "–"}</div>
+                </div>
+                <div className="kpi">
+                  <div className="t">SEO</div>
+                  <div className="v">{scores.seo ?? "–"}</div>
+                </div>
+              </div>
 
-          <div className="panel" style={{ marginTop: 12 }}>
-            <h2 style={{ margin: "0 0 8px" }}>Key lab metrics</h2>
-            <div className="row">
-              <span className="badge">FCP: {formatMs(metrics.fcpMs)}</span>
-              <span className="badge">LCP: {formatMs(metrics.lcpMs)}</span>
-              <span className="badge">CLS: {formatCls(metrics.cls)}</span>
-              <span className="badge">TBT: {formatMs(metrics.tbtMs)}</span>
-              <span className="badge">Speed Index: {formatMs(metrics.siMs)}</span>
+              <div className="panel" style={{ marginTop: 12 }}>
+                <h2 style={{ margin: "0 0 8px" }}>Key lab metrics</h2>
+                <div className="row">
+                  <span className="badge">FCP: {formatMs(metrics.fcpMs)}</span>
+                  <span className="badge">LCP: {formatMs(metrics.lcpMs)}</span>
+                  <span className="badge">CLS: {formatCls(metrics.cls)}</span>
+                  <span className="badge">TBT: {formatMs(metrics.tbtMs)}</span>
+                  <span className="badge">Speed Index: {formatMs(metrics.siMs)}</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="panel" style={{ marginTop: 12 }}>
+              <div className="subtle">PageSpeed Insights results not available for this run.</div>
             </div>
-          </div>
+          )}
 
-          {/* Tabbed detail panels (left nav + right content) */}
+          {/* Tabbed detail panels */}
           <div className="panel" style={{ marginTop: 12 }}>
             <div className="tabsLayout">
               {/* LEFT: Categories */}
@@ -231,7 +239,9 @@ export default function App() {
                   onClick={() => setActiveTab("crux")}
                 >
                   Real user data (CrUX)
-                  <span className="tabsNavChevron" aria-hidden="true">›</span>
+                  <span className="tabsNavChevron" aria-hidden="true">
+                    ›
+                  </span>
                 </button>
 
                 <button
@@ -242,7 +252,9 @@ export default function App() {
                   onClick={() => setActiveTab("opps")}
                 >
                   Top opportunities
-                  <span className="tabsNavChevron" aria-hidden="true">›</span>
+                  <span className="tabsNavChevron" aria-hidden="true">
+                    ›
+                  </span>
                 </button>
 
                 <button
@@ -253,7 +265,9 @@ export default function App() {
                   onClick={() => setActiveTab("diag")}
                 >
                   Diagnostics
-                  <span className="tabsNavChevron" aria-hidden="true">›</span>
+                  <span className="tabsNavChevron" aria-hidden="true">
+                    ›
+                  </span>
                 </button>
 
                 <button
@@ -264,8 +278,11 @@ export default function App() {
                   onClick={() => setActiveTab("ai")}
                 >
                   AI recommendations
-                  <span className="tabsNavChevron" aria-hidden="true">›</span>
+                  <span className="tabsNavChevron" aria-hidden="true">
+                    ›
+                  </span>
                 </button>
+
                 <button
                   type="button"
                   className={`tabsNavBtn ${activeTab === "asp" ? "isActive" : ""}`}
@@ -274,7 +291,9 @@ export default function App() {
                   onClick={() => setActiveTab("asp")}
                 >
                   ASP recommendations
-                  <span className="tabsNavChevron" aria-hidden="true">›</span>
+                  <span className="tabsNavChevron" aria-hidden="true">
+                    ›
+                  </span>
                 </button>
               </div>
 
@@ -289,72 +308,89 @@ export default function App() {
                     {activeTab === "asp" && "ASP recommendations"}
                   </h2>
                 </div>
+
                 <div className="tabsContentBody">
                   {activeTab === "crux" ? (
                     <>
-                      {hasCrux ? (
-                        <>
-                          <div className="subtle" style={{ marginBottom: 8 }}>
-                            Source: <span className="badge">{fieldData?.id || "–"}</span>
-                          </div>
+                      {psiAudit ? (
+                        hasCrux ? (
+                          <>
+                            <div className="subtle" style={{ marginBottom: 8 }}>
+                              Source: <span className="badge">{fieldData?.id || "–"}</span>
+                            </div>
 
-                          <div className="row">
-                            <span className="badge">LCP p75: {formatMs(fieldData?.lcp?.percentile)}</span>
-                            <span className="badge">INP p75: {formatMs(fieldData?.inp?.percentile)}</span>
-                            <span className="badge">CLS p75: {formatCls(fieldData?.cls?.percentile)}</span>
-                          </div>
+                            <div className="row">
+                              <span className="badge">LCP p75: {formatMs(fieldData?.lcp?.percentile)}</span>
+                              <span className="badge">INP p75: {formatMs(fieldData?.inp?.percentile)}</span>
+                              <span className="badge">CLS p75: {formatCls(fieldData?.cls?.percentile)}</span>
+                            </div>
 
-                          <div className="subtle" style={{ marginTop: 8 }}>
-                            Field data is a 28-day rolling dataset and may be unavailable for low-traffic pages.
-                          </div>
-                        </>
+                            <div className="subtle" style={{ marginTop: 8 }}>
+                              Field data is a 28-day rolling dataset and may be unavailable for low-traffic pages.
+                            </div>
+                          </>
+                        ) : (
+                          <div className="subtle">No CrUX field data available for this URL/origin.</div>
+                        )
                       ) : (
-                        <div className="subtle">No CrUX field data available for this URL/origin.</div>
+                        <div className="subtle">Run the audit to load PageSpeed Insights data.</div>
                       )}
                     </>
                   ) : null}
 
                   {activeTab === "opps" ? (
                     <>
-                      <div className="subtle" style={{ marginBottom: 8 }}>
-                        Ranked by estimated time saving (lab).
-                      </div>
+                      {psiAudit ? (
+                        <>
+                          <div className="subtle" style={{ marginBottom: 8 }}>
+                            Ranked by estimated time saving (lab).
+                          </div>
 
-                      {hasOpportunities ? (
-                        <div style={{ display: "grid", gap: 8 }}>
-                          {opportunities.slice(0, 8).map((o) => (
-                            <div key={o.id} className="kpi" style={{ textAlign: "left" }}>
-                              <div className="t">
-                                {o.title}{" "}
-                                <span className="badge" style={{ marginLeft: 8 }}>
-                                  Save: {formatMs(o.savingsMs)}
-                                </span>
-                              </div>
-                              {o.description ? <div className="subtle">{o.description}</div> : null}
+                          {hasOpportunities ? (
+                            <div style={{ display: "grid", gap: 8 }}>
+                              {opportunities.slice(0, 8).map((o) => (
+                                <div key={o.id} className="kpi" style={{ textAlign: "left" }}>
+                                  <div className="t">
+                                    {o.title}{" "}
+                                    <span className="badge" style={{ marginLeft: 8 }}>
+                                      Save: {formatMs(o.savingsMs)}
+                                    </span>
+                                  </div>
+                                  {o.description ? <div className="subtle">{o.description}</div> : null}
+                                </div>
+                              ))}
                             </div>
-                          ))}
-                        </div>
+                          ) : (
+                            <div className="subtle">No opportunities returned for this run.</div>
+                          )}
+                        </>
                       ) : (
-                        <div className="subtle">No opportunities returned for this run.</div>
+                        <div className="subtle">Run the audit to load opportunities.</div>
                       )}
                     </>
                   ) : null}
 
                   {activeTab === "diag" ? (
                     <>
+                      {psiAudit ? (
+                        hasDiagnostics ? (
+                          <>
+                            <div className="row">
+                              <span className="badge">
+                                Total byte weight: {formatKb(diagnostics?.totalByteWeight)}
+                              </span>
+                            </div>
 
-                      {hasDiagnostics ? (
-                        <>
-                          <div className="row">
-                            <span className="badge">Total byte weight: {formatKb(diagnostics?.totalByteWeight)}</span>
-                          </div>
-
-                          <div className="subtle" style={{ marginTop: 8 }}>
-                            Tip: DOM size, third-party impact, and main-thread work are great signals for “too much stuff on one page”.
-                          </div>
-                        </>
+                            <div className="subtle" style={{ marginTop: 8 }}>
+                              Tip: DOM size, third-party impact, and main-thread work are great signals for “too much stuff
+                              on one page”.
+                            </div>
+                          </>
+                        ) : (
+                          <div className="subtle">No diagnostics returned for this run.</div>
+                        )
                       ) : (
-                        <div className="subtle">No diagnostics returned for this run.</div>
+                        <div className="subtle">Run the audit to load diagnostics.</div>
                       )}
                     </>
                   ) : null}
@@ -397,84 +433,150 @@ export default function App() {
 
                   {activeTab === "asp" ? (
                     <>
-                      <div className="row" style={{ marginBottom: 12 }}>
-                        <button className="btn" onClick={runAspRecommendations} disabled={aspRunning}>
-                          {aspRunning ? "Analysing…" : "Run ASP recommendations"}
-                        </button>
-                        {aspData?.finalUrl ? <span className="badge">Final URL: {aspData.finalUrl}</span> : null}
-                      </div>
+                      {domAudit?.counts?.sections?.breakdown?.length ? (
+                        <div className="panel" style={{ marginTop: 12 }}>
+                          <h2 style={{ margin: "0 0 8px" }}>Per-section breakdown</h2>
 
-                      {aspError ? <div className="error">{aspError}</div> : null}
-
-                      {aspData?.counts ? (
-                        <div style={{ display: "grid", gap: 10 }}>
-                          <div className="kpi" style={{ textAlign: "left" }}>
-                            <div className="t">Sections</div>
-                            <div className="v">{aspData.counts.sections}</div>
+                          <div className="subtle" style={{ marginBottom: 10 }}>
+                            Sections found: <span className="badge">{domAudit.counts.sections.total}</span>
                           </div>
 
-                          <div className="kpi" style={{ textAlign: "left" }}>
-                            <div className="t">Carousels (.w-icatcher-slider)</div>
-                            <div className="subtle">
-                              Count: {aspData.counts.carousels.count} · Slides total: {aspData.counts.carousels.slidesTotal}
-                            </div>
-                          </div>
+                          <div style={{ display: "grid", gap: 10 }}>
+                            {domAudit.counts.sections.breakdown.map((s) => (
+                             <details key={s.index} className="panel asp-section">
+                                <summary className="asp-section__summary">
+                                  <div className="asp-section__left">
+                                    <span className="asp-section__dot" aria-hidden="true" />
+                                    <span className="asp-section__title">
+                                      Section - 
+                                      {/* {s.index} */}
+                                      {s.classes ? (
+                                        <span className="asp-section__class">
+                                          {" "}
+                                          {s.classes.split(" ").filter(Boolean)[1] || ""}
+                                        </span>
+                                      ) : null}
+                                    </span>
+                                  </div>
 
-                          <div className="kpi" style={{ textAlign: "left" }}>
-                            <div className="t">Testimonials (.w-testimonials)</div>
-                            <div className="subtle">
-                              Blocks: {aspData.counts.testimonials.count} · Items total: {aspData.counts.testimonials.itemsTotal}
-                            </div>
-                          </div>
+                                  <div className="asp-section__right">
+                                    <div className="asp-section__meta">
+                                      <span className="badge">Images {s.images}</span>
+                                      <span className="badge">Videos {s.videos}</span>
+                                      <span className="badge">Iframes {s.iframes}</span>
+                                      <span className="badge">Carousels {s.carousels}</span>
+                                    </div>
 
-                          <div className="kpi" style={{ textAlign: "left" }}>
-                            <div className="t">Libraries</div>
-                            <div className="subtle">
-                              Containers: {aspData.counts.libraries.containers} · Types total: {aspData.counts.libraries.typesTotal}
-                              <br />
-                              News: {aspData.counts.libraries.types.news} · Products: {aspData.counts.libraries.types.products} ·
-                              Video: {aspData.counts.libraries.types.video} · Sponsor: {aspData.counts.libraries.types.sponsor}
-                            </div>
-                          </div>
+                                    <span className="asp-section__chevron" aria-hidden="true" />
+                                  </div>
+                                </summary>
 
-                          <div className="kpi" style={{ textAlign: "left" }}>
-                            <div className="t">Media / embeds</div>
-                            <div className="subtle">
-                              Images: {aspData.counts.media.images} · Videos: {aspData.counts.media.videos} · Iframes: {aspData.counts.media.iframes}
-                            </div>
-                          </div>
+                                <div style={{ padding: 12, display: "grid", gap: 10 }}>
+                                  <div className="grid2">
 
-                          <div className="kpi" style={{ textAlign: "left" }}>
-                            <div className="t">Ad space</div>
-                            <div className="subtle">
-                              Left: {aspData.counts.adSpace.skyscraperLeft} · Right: {aspData.counts.adSpace.skyscraperRight} ·
-                              Top: {aspData.counts.adSpace.skyscraperTop} · Bottom: {aspData.counts.adSpace.skyscraperBottom} ·
-                              Total: {aspData.counts.adSpace.total}
-                            </div>
+                                    {s.images > 0 && (
+                                      <div className="kpi" style={{ textAlign: "left" }}>
+                                        <h3 className="t">Images</h3>
+                                         <div className="asp-carousel-total" style={{ marginBottom: 10 }}>
+                                              <span className="subtle">Total</span>
+                                              <span className="badge">
+                                                {s.images} image{s.images !== 1 ? "s" : ""}
+                                              </span>
+                                          </div>
+                                          <span className="subtle" style={{ marginBottom: 5 }}>Largest 3 images in the section: </span>
+                                          {Array.isArray(s.topImages) && s.topImages.length > 0 && (
+                                            <ul style={{ marginTop: 0 }}>
+                                              {s.topImages.map((img) => (
+                                                <li key={img.url}>
+                                                  {img.name} – {img.mb} MB ({img.kb} KB)
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          )}
+                                      </div>
+                                    )}
+
+                                    {s.videos > 0 && (
+                                      <div className="kpi" style={{ textAlign: "left" }}>
+                                        <h3 className="t">Videos</h3>
+                                        <div className="v">{s.videos}</div>
+                                      </div>
+                                    )}
+
+                                    {s.iframes > 0 && (
+                                      <div className="kpi" style={{ textAlign: "left" }}>
+                                        <h3 className="t">Iframes</h3>
+                                        <div className="v">{s.iframes}</div>
+                                      </div>
+                                    )}
+
+                                    {s.carousels > 0 && (
+                                      <div className="kpi" style={{ textAlign: "left" }}>
+                                        <h3 className="t">Carousels</h3>
+
+                                        {Array.isArray(s.carouselBreakdown) && s.carouselBreakdown.length > 0 ? (
+                                          <div className="asp-carousel-list">
+                                            {s.carouselBreakdown.map((c) => (
+                                              <div key={c.index} className="asp-carousel-item">
+                                                <div className="asp-carousel-header">
+                                                  <span className="badge badge--muted">Carousel {c.index}</span>
+                                                  {c.type && (
+                                                    <span className="badge badge--soft">{c.type}</span>
+                                                  )}
+                                                </div>
+
+                                                <div className="asp-carousel-stats">
+                                                  <div className="kpi kpi--inline">
+                                                    <span className="kpi__label">Slides</span>
+                                                    <span className="kpi__value">{c.slides}</span>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            ))}
+
+                                            <div className="asp-carousel-total">
+                                              <span className="subtle">Total</span>
+                                              <span className="badge">
+                                                {s.carousels} carousel{s.carousels !== 1 ? "s" : ""}
+                                              </span>
+                                              <span className="badge">{s.carouselSlides} slides</span>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <div className="subtle" style={{ marginTop: 6 }}>
+                                            No carousels found in this section.
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+
+                                  </div>
+
+                                </div>
+                              </details>
+                            ))}
                           </div>
                         </div>
                       ) : (
-                        <div className="subtle">Run the check to scrape the page source and compute counts.</div>
+                        <div className="subtle">Run the audit to see per-section counts.</div>
                       )}
 
-                      {aspData?.asp ? (
+                      {domAudit?.asp ? (
                         <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
                           <div className="kpi" style={{ textAlign: "left" }}>
                             <div className="t">ASP score</div>
                             <div className="row">
                               <span className="badge">
-                                {aspData.asp.overall.label} ({aspData.asp.overall.score}/100)
+                                {domAudit.asp.overall.label} ({domAudit.asp.overall.score}/100)
                               </span>
-                              <span className="badge">
-                                Severity: {aspData.asp.overall.severity}
-                              </span>
+                              <span className="badge">Severity: {domAudit.asp.overall.severity}</span>
                             </div>
                           </div>
 
                           <div className="kpi" style={{ textAlign: "left" }}>
                             <div className="t">Findings</div>
                             <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-                              {aspData.asp.findings.map((f) => (
+                              {domAudit.asp.findings.map((f) => (
                                 <div key={f.key} className="subtle">
                                   <strong>{f.label}:</strong> {String(f.value)}{" "}
                                   {f.severity === "good" ? "✅" : f.severity === "warn" ? "⚠️" : "❌"}
@@ -486,9 +588,9 @@ export default function App() {
 
                           <div className="kpi" style={{ textAlign: "left" }}>
                             <div className="t">Recommended actions</div>
-                            {aspData.asp.recommendations?.length ? (
+                            {domAudit.asp.recommendations?.length ? (
                               <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
-                                {aspData.asp.recommendations.map((r) => (
+                                {domAudit.asp.recommendations.map((r) => (
                                   <div key={r.key}>
                                     <div style={{ fontWeight: 600 }}>{r.title}</div>
                                     <div className="subtle">{r.action}</div>
@@ -503,15 +605,12 @@ export default function App() {
                           </div>
                         </div>
                       ) : null}
-
                     </>
                   ) : null}
-
                 </div>
               </div>
             </div>
           </div>
-
         </>
       ) : null}
     </div>

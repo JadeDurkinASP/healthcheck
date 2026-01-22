@@ -31,7 +31,7 @@ body {
 a { color: inherit; }
 
 .container {
-  max-width: 1100px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 18px;
 }
@@ -106,8 +106,18 @@ a { color: inherit; }
   border: 1px solid var(--panel-border);
   background: rgba(0,0,0,0.18);
 }
-.kpi .t { font-size: 12px; color: var(--muted); }
-.kpi .v { font-size: 24px; font-weight: 700; }
+/* Label */
+.kpi .t {
+  font-size: 1.05rem;  
+  font-weight: 600;
+  margin: 0;             
+}
+
+/* Value */
+.kpi .v {
+  font-size: 0.95rem;
+  opacity: 0.85;
+}
 
 .badge {
   display: inline-block;
@@ -262,4 +272,190 @@ pre {
 .tabsContentBody {
   padding: 16px;
 }
+
+/* =============================
+   ASP Accordion – Dark / Green
+============================= */
+
+.asp-section {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Remove default marker */
+.asp-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Header */
+.asp-section__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+
+  padding: 14px 16px;
+  cursor: pointer;
+  user-select: none;
+
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  transition:
+    background-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+/* Hover */
+.asp-section__summary:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+/* Open state */
+.asp-section[open] > .asp-section__summary {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* Left side */
+.asp-section__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Green dot */
+.asp-section__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  box-shadow: 0 0 0 4px rgba(0, 255, 140, 0.15);
+}
+
+/* Title */
+.asp-section__title {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+/* Right side */
+.asp-section__right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Meta badges */
+.asp-section__meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Chevron */
+.asp-section__chevron {
+  width: 14px;
+  height: 14px;
+  position: relative;
+  margin-left: 20px;
+}
+
+.asp-section__chevron::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+
+  transform: rotate(45deg);
+  transition: transform 0.25s ease;
+  opacity: 0.8;
+}
+
+/* Open: chevron up */
+.asp-section[open] .asp-section__chevron::before {
+  transform: rotate(-135deg);
+}
+
+/* Content spacing */
+.asp-section > :not(summary) {
+  padding: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Wrapper */
+.asp-carousel-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+/* Individual carousel card */
+.asp-carousel-item {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  gap: 6px;
+}
+
+/* Header row */
+.asp-carousel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Stats row */
+.asp-carousel-stats {
+  display: flex;
+  gap: 12px;
+}
+
+/* Inline KPI */
+.kpi--inline {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 12px;
+}
+
+.kpi--inline .kpi__label {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.kpi--inline .kpi__value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--asp-green, #3ddc97);
+}
+
+/* Total row */
+.asp-carousel-total {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  opacity: 0.9;
+}
+
+.asp-carousel-total .subtle {
+  margin: 0;
+}
+
+/* Badge variants */
+.badge--muted {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.badge--soft {
+  background: rgba(61, 220, 151, 0.15);
+  color: #3ddc97;
+}
+
+
 

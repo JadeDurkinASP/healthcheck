@@ -1,5 +1,7 @@
 import express from "express";
 import { load } from "cheerio";
+import * as chromeLauncher from "chrome-launcher";
+import puppeteer from "puppeteer-core";
 import cors from "cors";
 import "dotenv/config";
 
@@ -44,6 +46,102 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: "1mb" }));
+
+function toAbs(url, base) {
+  try {
+    return new URL(url, base).toString();
+  } catch {
+    return null;
+  }
+}
+
+function fileNameFromUrl(urlStr) {
+  try {
+    const u = new URL(urlStr);
+    const last = u.pathname.split("/").filter(Boolean).pop() || urlStr;
+    return decodeURIComponent(last);
+  } catch {
+    return urlStr;
+  }
+}
+
+async function getRemoteSizeBytes(url, { timeoutMs = 12000 } = {}) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+
+  try {
+    // 1) HEAD
+    const head = await fetch(url, { method: "HEAD", signal: ac.signal });
+    const cl = head.headers.get("content-length");
+    if (cl && Number.isFinite(Number(cl))) return Number(cl);
+
+    // 2) Range probe
+    const range = await fetch(url, {
+      method: "GET",
+      headers: { Range: "bytes=0-0" },
+      signal: ac.signal,
+    });
+
+    const cr = range.headers.get("content-range"); // bytes 0-0/12345
+    if (cr) {
+      const total = cr.split("/")[1];
+      if (total && Number.isFinite(Number(total))) return Number(total);
+    }
+
+    const cl2 = range.headers.get("content-length");
+    if (cl2 && Number.isFinite(Number(cl2))) return Number(cl2);
+
+    // 3) last resort: measure what downloaded
+    const buf = await range.arrayBuffer();
+    return buf.byteLength;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let i = 0;
+
+  async function worker() {
+    while (i < items.length) {
+      const idx = i++;
+      try {
+        results[idx] = await mapper(items[idx], idx);
+      } catch {
+        results[idx] = null;
+      }
+    }
+  }
+
+  const poolSize = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: poolSize }, () => worker()));
+  return results.filter(Boolean);
+}
+
+async function getTopImagesForUrls({
+  urls,
+  topN = 3,
+  maxToCheck = 40,
+  concurrency = 6,
+}) {
+  const list = (urls || []).slice(0, maxToCheck);
+
+  const sized = await mapWithConcurrency(list, concurrency, async (url) => {
+    const bytes = await getRemoteSizeBytes(url);
+    return {
+      url,
+      name: fileNameFromUrl(url),
+      bytes,
+      kb: Math.round(bytes / 1024),
+      mb: Number((bytes / (1024 * 1024)).toFixed(2)),
+    };
+  });
+
+  sized.sort((a, b) => b.bytes - a.bytes);
+  return sized.slice(0, topN);
+}
+
 
 function to100(v) {
   return typeof v === "number" ? Math.round(v * 100) : null;
@@ -192,63 +290,371 @@ app.get("/api/audit", async (req, res) => {
 
 });
 
-app.post("/api/recommendations", async (req, res) => {
+async function getRenderedAspCounts(targetUrl) {
+  const chrome = await chromeLauncher.launch({
+    chromeFlags: [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-gpu",
+      "--disable-dev-shm-usage",
+    ],
+    logLevel: "silent",
+  });
+
+  let browser;
   try {
-    const { apiKey, audit } = req.body || {};
-    if (!apiKey) return res.status(400).json({ error: "Missing apiKey" });
-    if (!audit?.scores) return res.status(400).json({ error: "Missing audit data" });
-
-    const compact = {
-      targetUrl: audit.targetUrl,
-      finalUrl: audit.finalUrl,
-      fetchTime: audit.fetchTime,
-      scores: audit.scores,
-      metrics: audit.metrics,
-    };
-
-    const prompt = `
-You are an expert web performance & accessibility auditor.
-
-Given this Lighthouse-style audit summary for ONE page:
-- Provide an executive summary (3-5 bullets)
-- Provide top 10 recommended actions ranked by impact (each with a why + what to do)
-- Split into: Quick wins (same day), Medium (1-3 days), Bigger projects (multi-day)
-- Call out likely root causes based on metrics (LCP/CLS/TBT/FCP/Speed Index)
-- Suggest how to re-test and what to monitor
-Use British spellings. Be specific and practical.
-Return as Markdown.
-`;
-
-    const openaiRes = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        input: [
-          { role: "system", content: "You write concise, high-signal audit recommendations." },
-          { role: "user", content: prompt },
-          { role: "user", content: JSON.stringify(compact) },
-        ],
-      }),
+    browser = await puppeteer.connect({
+      browserURL: `http://127.0.0.1:${chrome.port}`,
     });
 
-    if (!openaiRes.ok) {
-      const text = await openaiRes.text();
-      return res.status(openaiRes.status).json({ error: text });
+    const page = await browser.newPage();
+
+    await page.setViewport({ width: 1366, height: 768 });
+    await page.setUserAgent(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36"
+    );
+
+    await page.goto(targetUrl, { waitUntil: "networkidle2", timeout: 90000 });
+
+    // Trigger lazy-render / sliders that init on visibility
+    await page.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const step = Math.floor(window.innerHeight * 0.9);
+      for (let i = 0; i < 6; i++) {
+        window.scrollBy(0, step);
+        await sleep(350);
+      }
+      window.scrollTo(0, 0);
+      await sleep(300);
+    });
+
+    const counts = await page.evaluate(() => {
+      const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+      const getCarouselRoots = (scope = document) => {
+        // Prefer ASP component wrappers as the only “root” per widget
+        const aspRoots = [
+          ...qsa(".w-icatcher-slider", scope),
+          ...qsa(".w-testimonials", scope),
+        ];
+
+        const isInsideAspRoot = (el) => aspRoots.some((wrap) => wrap !== el && wrap.contains(el));
+
+        // Generic roots (only if NOT inside ASP wrappers, to avoid double counting)
+        const genericRoots = [
+          ...qsa(".slick-slider", scope),
+          ...qsa(".swiper, .swiper-container", scope),
+        ].filter((el) => !isInsideAspRoot(el));
+
+        const combined = Array.from(new Set([...aspRoots, ...genericRoots]));
+
+        // Keep only outermost roots
+        return combined.filter((el) => !combined.some((other) => other !== el && other.contains(el)));
+      };
+
+      const countSlidesInCarousel = (rootEl) => {
+        // -----------------------
+        // 1) ASP icatcher (Slick)
+        // -----------------------
+        if (rootEl.classList.contains("w-icatcher-slider")) {
+          // Prefer original items rather than slick’s generated structure
+          const items = qsa(".w-icatcher-slider__list__item:not(.slick-cloned)", rootEl);
+          if (items.length) return items.length;
+
+          // Fallback to slick-track if needed
+          const track = rootEl.querySelector(".slick-track");
+          if (track) return qsa(".slick-slide:not(.slick-cloned)", track).length;
+
+          return 0;
+        }
+
+        // --------------------------
+        // 2) ASP testimonials (Swiper)
+        // --------------------------
+        if (rootEl.classList.contains("w-testimonials")) {
+          const wrapper = rootEl.querySelector(".swiper-wrapper");
+          if (!wrapper) return 0;
+
+          const slides = qsa(".swiper-slide", wrapper);
+
+          // Best: count unique real slides via data-swiper-slide-index (handles loop duplicates)
+          const indices = slides
+            .map((s) => s.getAttribute("data-swiper-slide-index"))
+            .filter((v) => v !== null);
+
+          if (indices.length) return new Set(indices).size;
+
+          // Fallback: exclude obvious duplicates if present
+          const nonDupes = slides.filter((s) => !s.classList.contains("swiper-slide-duplicate"));
+          return nonDupes.length;
+        }
+
+        // -----------------------
+        // 3) Generic Slick
+        // -----------------------
+        const slickTrack = rootEl.querySelector(".slick-track");
+        if (slickTrack) return qsa(".slick-slide:not(.slick-cloned)", slickTrack).length;
+
+        // -----------------------
+        // 4) Generic Swiper
+        // -----------------------
+        const swiperWrapper = rootEl.querySelector(".swiper-wrapper");
+        if (swiperWrapper) {
+          const slides = qsa(".swiper-slide", swiperWrapper);
+
+          const indices = slides
+            .map((s) => s.getAttribute("data-swiper-slide-index"))
+            .filter((v) => v !== null);
+
+          if (indices.length) return new Set(indices).size;
+
+          const nonDupes = slides.filter((s) => !s.classList.contains("swiper-slide-duplicate"));
+          return nonDupes.length;
+        }
+
+        return 0;
+      };
+
+    const detectCarouselType = (rootEl) => {
+      if (rootEl.classList.contains("w-icatcher-slider")) return "slick";
+      if (rootEl.classList.contains("w-testimonials")) return "swiper";
+      if (rootEl.querySelector(".slick-track")) return "slick";
+      if (rootEl.querySelector(".swiper-wrapper")) return "swiper";
+      return "unknown";
+    };
+
+
+      // -----------------------------
+      // SECTION-BY-SECTION BREAKDOWN
+      // -----------------------------
+      const main = document.querySelector("main") || document;
+      const sectionEls = qsa("main .section");
+
+      const sectionBreakdown = sectionEls.map((section, i) => {
+        const images = qsa("img", section).length;
+        const videos = qsa("video", section).length;
+        const iframes = qsa("iframe", section).length;
+
+        // Collect image URLs in this section (unique)
+        const imageUrlsSet = new Set();
+
+        qsa("img", section).forEach((img) => {
+          // currentSrc is best (accounts for srcset selection)
+          const src = img.currentSrc || img.src || img.getAttribute("src");
+          if (src) imageUrlsSet.add(src);
+        });
+
+        // Also consider <source srcset> inside <picture> (optional, helps)
+        qsa("source[srcset]", section).forEach((source) => {
+          const srcset = source.getAttribute("srcset");
+          if (!srcset) return;
+
+          // pick the last candidate (often biggest)
+          const last = srcset
+            .split(",")
+            .map((s) => s.trim().split(" ")[0])
+            .filter(Boolean)
+            .pop();
+
+          if (last) imageUrlsSet.add(last);
+        });
+
+        const imageUrls = Array.from(imageUrlsSet).slice(0, 60); // cap to avoid massive payloads
+
+        const carouselsInSection = getCarouselRoots(section);
+
+        const carouselBreakdown = carouselsInSection.map((c, idx) => ({
+          index: idx + 1,
+          type: detectCarouselType(c),
+          slides: countSlidesInCarousel(c),
+        }));
+
+        const carouselSlidesInSection = carouselBreakdown.reduce((sum, c) => sum + c.slides, 0);
+
+        return {
+          index: i + 1,
+          id: section.id || null,
+          classes: section.className || null,
+          images,
+          videos,
+          iframes,
+          imageUrls,
+          carousels: carouselsInSection.length,
+          carouselSlides: carouselSlidesInSection,
+          carouselBreakdown,
+        };
+      });
+
+      // -----------------------------
+      // GLOBAL TOTALS (your original shape, plus sections breakdown)
+      // -----------------------------
+      const carouselsGlobal = getCarouselRoots(document);
+      const slidesPerCarousel = carouselsGlobal.map((el) => countSlidesInCarousel(el));
+
+      const carouselMeta = carouselsGlobal.map((el, idx) => ({
+        index: idx + 1,
+        slides: countSlidesInCarousel(el),
+        type: el.querySelector(".slick-track")
+          ? "slick"
+          : el.querySelector(".swiper-wrapper")
+          ? "swiper"
+          : "unknown",
+      }));
+
+      
+
+      const testimonials = qsa(".w-testimonials");
+      const testimonialsItemsPerBlock = testimonials.map((el) => {
+        const wrapper = el.querySelector(".swiper-wrapper");
+        if (wrapper) return qsa(".swiper-slide", wrapper).length;
+
+        const slickReal = qsa(".slick-slide:not(.slick-cloned)", el).length;
+        const swiper = qsa(".swiper-slide", el).length;
+        return Math.max(slickReal, swiper);
+      });
+
+      const testimonialsCounts = {
+        count: testimonials.length,
+        itemsTotal: testimonialsItemsPerBlock.reduce((a, b) => a + b, 0),
+        itemsPerBlock: testimonialsItemsPerBlock,
+        note: "Rendered DOM count (swiper/slick).",
+      };
+
+      const librariesOuterCount = qsa(".js-library-list-outer").length;
+
+      const libraryTypes = {
+        news: qsa(".m-libraries-news-list").length,
+        products: qsa(".m-libraries-products-list").length,
+        video: qsa(".m-libraries-video-list").length,
+        sponsor: qsa(".m-libraries-sponsor-list").length,
+      };
+
+      const libraryTypesTotal =
+        libraryTypes.news +
+        libraryTypes.products +
+        libraryTypes.video +
+        libraryTypes.sponsor;
+
+      const media = {
+        images: qsa("img").length,
+        videos: qsa("video").length,
+        iframes: qsa("iframe").length,
+      };
+
+      const adSpace = {
+        skyscraperLeft: qsa(".skyscraper-left").length,
+        skyscraperRight: qsa(".skyscraper-right").length,
+        skyscraperTop: qsa(".skyscraper-top").length,
+        skyscraperBottom: qsa(".skyscraper-bottom").length,
+      };
+
+      const adSpaceTotal =
+        adSpace.skyscraperLeft +
+        adSpace.skyscraperRight +
+        adSpace.skyscraperTop +
+        adSpace.skyscraperBottom;
+
+      return {
+        // ✅ sections is now richer, with breakdown
+        sections: {
+          total: sectionEls.length,
+          breakdown: sectionBreakdown,
+        },
+
+        carousels: {
+          selector: "slick/swiper/w-icatcher-slider",
+          count: carouselsGlobal.length,
+          slidesPerCarousel,
+          slidesTotal: slidesPerCarousel.reduce((a, b) => a + b, 0),
+          breakdown: carouselMeta,
+          note: "Rendered DOM count (slick/swiper).",
+        },
+
+        testimonials: testimonialsCounts,
+
+        libraries: {
+          containers: librariesOuterCount,
+          types: libraryTypes,
+          typesTotal: libraryTypesTotal,
+        },
+
+        media,
+
+        adSpace: { ...adSpace, total: adSpaceTotal },
+      };
+    });
+
+    // ✅ NEW: For each section, compute top 3 largest images by byte size
+    if (counts?.sections?.breakdown?.length) {
+      const targetBase = targetUrl; // for resolving relative urls if any slip through
+
+      await Promise.all(
+        counts.sections.breakdown.map(async (section) => {
+          // Ensure absolute urls (currentSrc is usually absolute, but be safe)
+          const absUrls = (section.imageUrls || [])
+            .map((u) => toAbs(u, targetBase))
+            .filter(Boolean);
+
+          const topImages = await getTopImagesForUrls({
+            urls: absUrls,
+            topN: 3,
+            maxToCheck: 40,
+            concurrency: 6,
+          });
+
+          section.topImages = topImages;
+
+          // Optional: remove raw urls to keep payload smaller
+          // delete section.imageUrls;
+        })
+      );
     }
 
-    const json = await openaiRes.json();
 
-    const text = (json.output || [])
-      .flatMap((o) => o.content || [])
-      .filter((c) => c.type === "output_text")
-      .map((c) => c.text)
-      .join("\n");
+    await page.close();
+    return counts;
+  } finally {
+    try {
+      if (browser) await browser.disconnect();
+    } catch {}
+    try {
+      await chrome.kill();
+    } catch {}
+  }
+}
 
-    res.json({ recommendations: text || "No recommendations returned." });
+app.get("/api/asp-recommendations", async (req, res) => {
+  try {
+    const target = (req.query.url || TARGET_URL || "").toString();
+
+    let parsed;
+    try {
+      parsed = new URL(target);
+    } catch {
+      return res.status(400).json({ error: "Invalid url" });
+    }
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      return res.status(400).json({ error: "URL must be http/https" });
+    }
+
+    // ✅ Rendered DOM counts (headless Chrome)
+    const counts = await getRenderedAspCounts(target);
+
+    // ✅ Keep your scoring logic unchanged (it expects sections to be a number)
+    const normalisedCounts = {
+      ...counts,
+      sections: counts.sections?.total ?? 0,
+    };
+
+    const asp = scoreAspCounts(normalisedCounts);
+
+    res.json({
+      targetUrl: target,
+      finalUrl: target,
+      counts,
+      asp,
+      mode: "rendered-dom",
+    });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
   }
@@ -271,22 +677,37 @@ function buildAspPerfCounts(html) {
 
   const sections = $(".section").length;
 
-  const icatcher = $(".w-icatcher-slider");
-  const icatcherSlidesPerCarousel = icatcher
-    .map((_, el) => {
-      const $el = $(el);
-      const track = $el.find(".slick-track").first();
-      if (track.length) return track.find(".slick-slide").length;
-      // fallback: count slides anywhere inside slider
-      return $el.find(".slick-slide").length;
-    })
-    .get();
+// 2) Carousels: .w-icatcher-slider
+// Count REAL slides per carousel (ignore slick-cloned)
+const icatcher = $(".w-icatcher-slider");
+
+const icatcherSlidesPerCarousel = icatcher
+  .map((_, el) => {
+    const $el = $(el);
+
+    // Prefer slick-track children (avoids nested sliders)
+    const $track = $el.find(".slick-track").first();
+
+    const $slides = $track.length
+      ? $track.children(".slick-slide")
+      : $el.find(".slick-slide");
+
+    // Exclude cloned slides (slick infinite mode)
+    const realSlides = $slides.not(".slick-cloned").length;
+
+    return realSlides;
+  })
+  .get();
 
   const carousels = {
+    selector: ".w-icatcher-slider",
     count: icatcher.length,
-    slidesTotal: icatcherSlidesPerCarousel.reduce((a, b) => a + b, 0),
     slidesPerCarousel: icatcherSlidesPerCarousel,
+    slidesTotal: icatcherSlidesPerCarousel.reduce((a, b) => a + b, 0),
+    note:
+    "Counts non-cloned .slick-slide per .w-icatcher-slider (HTML source only).",
   };
+
 
   const testimonials = $(".w-testimonials");
   const testimonialsItemsPerBlock = testimonials
@@ -789,49 +1210,6 @@ function scoreAspCounts(counts) {
 
   return { overall, findings, recommendations };
 }
-
-
-app.get("/api/asp-recommendations", async (req, res) => {
-  try {
-    const target = (req.query.url || TARGET_URL || "").toString();
-
-    let parsed;
-    try {
-      parsed = new URL(target);
-    } catch {
-      return res.status(400).json({ error: "Invalid url" });
-    }
-    if (!["http:", "https:"].includes(parsed.protocol)) {
-      return res.status(400).json({ error: "URL must be http/https" });
-    }
-
-    const r = await fetch(target, {
-      redirect: "follow",
-      headers: {
-        "User-Agent": "ASP-Healthcheck/1.0",
-        Accept: "text/html,application/xhtml+xml",
-      },
-    });
-
-    if (!r.ok) {
-      return res.status(r.status).json({ error: `Fetch failed: ${r.status}` });
-    }
-
-    const html = await r.text();
-    const counts = buildAspPerfCounts(html);
-    const asp = scoreAspCounts(counts);
-
-    res.json({
-      targetUrl: target,
-      finalUrl: r.url,
-      counts,
-      asp,
-    });
-
-  } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) });
-  }
-});
 
 app.use((req, res) => {
   res.status(404).json({ error: `Not found: ${req.method} ${req.url}` });
