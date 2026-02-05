@@ -81,6 +81,7 @@ export default function App() {
     aiRunning,
     aiText,
     extracted,
+    aiVisibility,
     suggestedKeywords,
     error: aiError,
     clearRecommendations,
@@ -306,6 +307,43 @@ export default function App() {
                         </div>
                       </div>
 
+                      {/* AI visibility score */}
+                      {aiVisibility ? (
+                        <div className="panel" style={{ marginTop: 12 }}>
+                          <h3 style={{ margin: "0 0 8px" }}>AI visibility</h3>
+
+                          <div className="row" style={{ alignItems: "center", flexWrap: "wrap" }}>
+                            <span className="badge">
+                              Score: {typeof aiVisibility.score === "number"
+                                ? `${aiVisibility.score}/100`
+                                : "–"}
+                            </span>
+
+                            {aiVisibility.grade && (
+                              <span className="badge badge--soft">
+                                Grade: {aiVisibility.grade}
+                              </span>
+                            )}
+                          </div>
+
+                          {Array.isArray(aiVisibility.reasons) && aiVisibility.reasons.length > 0 ? (
+                            <ul style={{ marginTop: 10 }}>
+                              {aiVisibility.reasons.slice(0, 5).map((r, i) => (
+                                <li key={i} className="subtle">{r}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <div className="subtle" style={{ marginTop: 10 }}>
+                              No major AI visibility issues detected. ✅
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="subtle" style={{ marginTop: 12 }}>
+                          
+                        </div>
+                      )}
+
                       {/* Keywords area */}
                       {extracted || suggestedKeywords.length ? (
                         <div className="panel" style={{ marginTop: 12 }}>
@@ -374,13 +412,13 @@ export default function App() {
                       ) : null}
 
                       {aiText ? (
-                        <div style={{ marginTop: 10 }}>
+                        <div className="panel" style={{ marginTop: 10 }}>
                           <h3 style={{ margin: "0 0 8px" }}>AI recommendations</h3>
                           <pre>{aiText}</pre>
                         </div>
                       ) : (
                         <div className="subtle" style={{ marginTop: 10 }}>
-                          Generate recommendations after running the audit.
+                          
                         </div>
                       )}
                     </>

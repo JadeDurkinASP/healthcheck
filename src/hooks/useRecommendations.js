@@ -1,22 +1,5 @@
-// hooks/useRecommendations.js
 import { useState } from "react";
-import { API_BASE } from "../config.js"; // wherever you define this
-
-function parseSuggestedKeywords(aiText) {
-  if (!aiText) return [];
-
-  // Look for a line like:
-  // "Suggested keywords: a, b, c"
-  // or "suggested keywords - a, b, c"
-  const m = aiText.match(/suggested keywords\s*[:\-]\s*(.+)/i);
-  if (!m?.[1]) return [];
-
-  return m[1]
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, 40);
-}
+import { API_BASE } from "../config.js";
 
 export function useRecommendations() {
   const [openAiKey, setOpenAiKey] = useState("");
@@ -24,50 +7,55 @@ export function useRecommendations() {
   const [aiText, setAiText] = useState("");
   const [extracted, setExtracted] = useState(null);
   const [suggestedKeywords, setSuggestedKeywords] = useState([]);
+  const [aiVisibility, setAiVisibility] = useState(null);
   const [error, setError] = useState("");
 
   function clearRecommendations() {
+    setError("");
     setAiText("");
     setExtracted(null);
     setSuggestedKeywords([]);
-    setError("");
+    setAiVisibility(null);
   }
 
-  async function getRecommendations(audit) {
+  // Returns true on success so callers can decide whether to switch tabs.
+  async function getRecommendations(psiAudit) {
     setError("");
+    setAiText("");
+    setExtracted(null);
+    setSuggestedKeywords([]);
+    setAiVisibility(null);
     setAiRunning(true);
 
     try {
-      const r = await fetch(`${API_BASE}/api/recommendations`, {
+      if (!psiAudit) throw new Error("Run an audit first.");
+      if (!openAiKey.trim()) throw new Error("Enter your OpenAI API key.");
+
+      const res = await fetch(`${API_BASE}/api/recommendations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: openAiKey, audit }),
+        body: JSON.stringify({ apiKey: openAiKey.trim(), audit: psiAudit }),
       });
 
-      const json = await r.json().catch(() => null);
-
-      if (!r.ok) {
-        setError(json?.error || `Request failed (${r.status})`);
-        return false;
+      const raw = await res.text();
+      let json;
+      try {
+        json = JSON.parse(raw);
+      } catch {
+        json = null;
       }
 
-      const text = json?.recommendations || "";
-      setAiText(text);
+      if (!res.ok) throw new Error(json?.error || raw || "OpenAI request failed");
 
-      const ex = json?.extracted || null;
-      setExtracted(ex);
+      setAiText(json?.recommendations || "No recommendations returned.");
 
-      // Prefer structured return if you add it later, otherwise parse from text
-      const kw =
-        Array.isArray(json?.suggestedKeywords) && json.suggestedKeywords.length
-          ? json.suggestedKeywords
-          : parseSuggestedKeywords(text);
-
-      setSuggestedKeywords(kw);
+      setExtracted(json?.extracted ?? null);
+      setSuggestedKeywords(Array.isArray(json?.suggestedKeywords) ? json.suggestedKeywords : []);
+      setAiVisibility(json?.aiVisibility ?? null);
 
       return true;
     } catch (e) {
-      setError(String(e?.message || e));
+      setError(e?.message || String(e));
       return false;
     } finally {
       setAiRunning(false);
@@ -79,8 +67,11 @@ export function useRecommendations() {
     setOpenAiKey,
     aiRunning,
     aiText,
+
     extracted,
     suggestedKeywords,
+    aiVisibility,
+
     error,
     clearRecommendations,
     getRecommendations,

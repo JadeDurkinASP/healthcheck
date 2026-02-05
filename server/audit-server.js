@@ -733,12 +733,20 @@ app.post("/api/recommendations", async (req, res) => {
       .trim();
 
       const suggestedKeywords = parseSuggestedKeywords(text);
+      const aiVisibility = scoreAiVisibility(pageMeta);
+
+      console.log("AI payload:", {
+        suggestedKeywordsCount: suggestedKeywords.length,
+        aiVisibility,
+      });
 
       return res.json({
         recommendations: text || "No recommendations returned.",
         extracted: pageMeta,
         suggestedKeywords,
+        aiVisibility,
       });
+
   } catch (e) {
     return res.status(500).json({ error: String(e?.message || e) });
   }
@@ -746,6 +754,46 @@ app.post("/api/recommendations", async (req, res) => {
 
 
 // helper functions
+
+function scoreAiVisibility(pageMeta) {
+  const reasons = [];
+  let score = 0;
+
+  // A) Crawl/index readiness (20)
+  // You’d need to also extract robots meta + canonical
+  if (pageMeta.canonical) { score += 8; } else reasons.push("Missing canonical link");
+  if (pageMeta.robots?.includes("noindex")) reasons.push("Meta robots contains noindex");
+  else score += 12;
+
+  // B) Machine-readable meaning (25)
+  if (pageMeta.schemaCount > 0) score += 15;
+  else reasons.push("No JSON-LD structured data detected (Schema.org)");
+  if (pageMeta.headings?.h1) score += 10;
+  else reasons.push("Missing or empty H1");
+
+  // C) Content clarity (25)
+  const len = (pageMeta.contentSample || "").length;
+  if (len >= 800) score += 15;
+  else reasons.push("Low body text content (may be hard for AI to summarise)");
+  if (pageMeta.headings?.h2?.length >= 3) score += 10;
+  else reasons.push("Few H2 headings (weak topical structure)");
+
+  // D) Snippet metadata (15)
+  if (pageMeta.title) score += 5; else reasons.push("Missing <title>");
+  if (pageMeta.metaDescription) score += 5; else reasons.push("Missing meta description");
+  if (pageMeta.openGraph?.title && pageMeta.openGraph?.description) score += 5;
+  else reasons.push("Open Graph tags incomplete (og:title / og:description)");
+
+  // E) Trust signals (15)
+  if (pageMeta.hasOrganisationSignals) score += 10;
+  else reasons.push("Weak organisation/provenance signals (about/contact/location)");
+  if (pageMeta.hasFaqLikeContent) score += 5;
+
+  score = Math.max(0, Math.min(100, score));
+  const grade = score >= 85 ? "Excellent" : score >= 70 ? "Good" : score >= 50 ? "Needs work" : "Poor";
+
+  return { score, grade, reasons };
+}
 
 function parseSuggestedKeywords(text) {
   if (!text) return [];
@@ -805,6 +853,19 @@ function extractPageMetaAndContent(html) {
         .slice(0, 40)
     : [];
 
+  const canonical = normaliseSpace($('link[rel="canonical"]').attr("href") || "");
+
+  const robots = normaliseSpace($('meta[name="robots"]').attr("content") || "");
+
+  // JSON-LD schema count
+  const schemaCount = $('script[type="application/ld+json"]').length;
+
+  // Open Graph
+  const openGraph = {
+    title: normaliseSpace($('meta[property="og:title"]').attr("content") || ""),
+    description: normaliseSpace($('meta[property="og:description"]').attr("content") || ""),
+  };
+
   const h1 = normaliseSpace($("h1").first().text());
   const h2s = $("h2")
     .slice(0, 12)
@@ -821,15 +882,32 @@ function extractPageMetaAndContent(html) {
   // Grab a reasonable amount of page text (avoid token explosions)
   const bodyText = clip($main.text(), 2200);
 
+  // Simple heuristics for “trust/provenance” + FAQ-ish patterns
+  const lower = (bodyText || "").toLowerCase();
+  const hasOrganisationSignals =
+    /about|contact|privacy|terms|company|organisation|location|address|phone|email/.test(lower);
+
+  const hasFaqLikeContent =
+    /faq|frequently asked|questions|how do i|how to|what is|when is|where is/.test(lower);
+
   return {
     title,
     metaDescription,
     metaKeywords,
+    canonical: canonical || null,
+    robots: robots || null,
+    schemaCount,
+    openGraph: {
+      title: openGraph.title || null,
+      description: openGraph.description || null,
+    },
     headings: {
       h1: h1 || null,
       h2: h2s,
     },
     contentSample: bodyText || null,
+    hasOrganisationSignals,
+    hasFaqLikeContent,
     notes: {
       hasMetaKeywords: metaKeywords.length > 0,
     },
