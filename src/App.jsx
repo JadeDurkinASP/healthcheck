@@ -1,170 +1,132 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
+import { TARGET_URL } from "./config.js";
+import { useAudit } from "./hooks/useAudit.js";
+import { useRecommendations } from "./hooks/useRecommendations.js";
+import { formatCls, formatKb, formatMs } from "./utils/format.js";
 
-// const API_BASE = "https://healthcheck-vdll.onrender.com";
-const API_BASE = "http://localhost:8787";
-const TARGET_URL = "https://www.icegaming.com/";
+// Tab labels and IDs used across nav and header.
+const TAB_LABELS = {
+  crux: "Real user data (CrUX)",
+  opps: "Top opportunities",
+  diag: "Diagnostics",
+  ai: "AI recommendations",
+  asp: "ASP recommendations",
+};
 
-function formatMs(ms) {
-  if (typeof ms !== "number") return "–";
-  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
-  return `${Math.round(ms)}ms`;
+// Left-side tab list.
+function TabsNav({ activeTab, onSelect }) {
+  return (
+    <div className="tabsNav" role="tablist" aria-label="Audit detail tabs">
+      <div className="tabsNavTitle">Categories</div>
+
+      {Object.entries(TAB_LABELS).map(([key, label]) => (
+        <button
+          key={key}
+          type="button"
+          className={`tabsNavBtn ${activeTab === key ? "isActive" : ""}`}
+          role="tab"
+          aria-selected={activeTab === key}
+          onClick={() => onSelect(key)}
+        >
+          {label}
+          <span className="tabsNavChevron" aria-hidden="true">
+            ›
+          </span>
+        </button>
+      ))}
+    </div>
+  );
 }
-function formatCls(v) {
-  return typeof v === "number" ? v.toFixed(3) : "–";
-}
-function formatKb(bytes) {
-  if (typeof bytes !== "number") return "-";
-  const kb = bytes / 1024;
-  if (kb > 1024) return `${(kb / 1024).toFixed(2)} MB`;
-  return `${kb.toFixed(0)} KB`;
+
+// Right-side tab header title.
+function TabsContentHeader({ activeTab }) {
+  return (
+    <div className="tabsContentHeader">
+      <h2 className="tabsContentTitle">{TAB_LABELS[activeTab]}</h2>
+    </div>
+  );
 }
 
 export default function App() {
-  const [status, setStatus] = useState("Idle");
-  const [error, setError] = useState("");
-
-  // Two audit outputs:
-  // - psiAudit: PageSpeed Insights / Lighthouse
-  // - domAudit: Rendered DOM counts + ASP scoring
-  const [psiAudit, setPsiAudit] = useState(null);
-  const [domAudit, setDomAudit] = useState(null);
-
-  const [isRunning, setIsRunning] = useState(false);
-
-  // AI
-  const [openAiKey, setOpenAiKey] = useState("");
-  const [aiRunning, setAiRunning] = useState(false);
-  const [aiText, setAiText] = useState("");
-
   // Tabs: "crux" | "opps" | "diag" | "ai" | "asp"
   const [activeTab, setActiveTab] = useState("crux");
+  const [targetUrl, setTargetUrl] = useState(TARGET_URL);
 
-  // PSI derived
-  const scores = useMemo(() => psiAudit?.scores || {}, [psiAudit]);
-  const metrics = useMemo(() => psiAudit?.metrics || {}, [psiAudit]);
-  const fieldData = useMemo(() => psiAudit?.fieldData || null, [psiAudit]);
-  const opportunities = useMemo(() => psiAudit?.opportunities || [], [psiAudit]);
-  const diagnostics = useMemo(() => psiAudit?.diagnostics || null, [psiAudit]);
+  // Audit state + derived data from PSI/DOM runs.
+  const {
+    status,
+    error: auditError,
+    psiAudit,
+    domAudit,
+    isRunning,
+    scores,
+    metrics,
+    fieldData,
+    opportunities,
+    diagnostics,
+    hasCrux,
+    hasOpportunities,
+    hasDiagnostics,
+    hasAnyAudit,
+    runAudit,
+  } = useAudit({
+    onSuccess: () => setActiveTab("asp"),
+    targetUrl,
+  });
 
-  const hasCrux =
-    typeof fieldData?.lcp?.percentile === "number" ||
-    typeof fieldData?.inp?.percentile === "number" ||
-    typeof fieldData?.cls?.percentile === "number";
+  // AI recommendation state and actions.
+  const {
+    openAiKey,
+    setOpenAiKey,
+    aiRunning,
+    aiText,
+    extracted,
+    suggestedKeywords,
+    error: aiError,
+    clearRecommendations,
+    getRecommendations,
+  } = useRecommendations();
 
-  const hasOpportunities = opportunities?.length > 0;
-  const hasDiagnostics = Boolean(diagnostics);
+  const error = auditError || aiError;
 
-  async function runAudit() {
-    setError("");
-    setAiText("");
-    setStatus("Running audit…");
-    setIsRunning(true);
-
-    // clear previous results
-    setPsiAudit(null);
-    setDomAudit(null);
-
-    try {
-      const [psiRes, domRes] = await Promise.all([
-        fetch(`${API_BASE}/api/audit`, { cache: "no-store" }),
-        fetch(
-          `${API_BASE}/api/asp-recommendations?url=${encodeURIComponent(TARGET_URL)}`,
-          { cache: "no-store" }
-        ),
-      ]);
-
-      const [psiText, domText] = await Promise.all([psiRes.text(), domRes.text()]);
-
-      let psiJson = null;
-      let domJson = null;
-
-      try {
-        psiJson = JSON.parse(psiText);
-      } catch {
-        psiJson = null;
-      }
-      try {
-        domJson = JSON.parse(domText);
-      } catch {
-        domJson = null;
-      }
-
-      if (!psiRes.ok) {
-        throw new Error(`PSI failed: ${psiJson?.error || psiText || psiRes.status}`);
-      }
-      if (!domRes.ok) {
-        throw new Error(`DOM audit failed: ${domJson?.error || domText || domRes.status}`);
-      }
-
-      setPsiAudit(psiJson);
-      setDomAudit(domJson);
-
-      setStatus("Done");
-
-      // Default to your rendered DOM audit view
-      setActiveTab("asp");
-    } catch (e) {
-      setError(e?.message || String(e));
-      setStatus("Failed");
-    } finally {
-      setIsRunning(false);
-    }
+  // Keep AI output in sync with the most recent audit run.
+  async function handleRunAudit() {
+    clearRecommendations();
+    await runAudit();
   }
 
-  async function getRecommendations() {
-    setError("");
-    setAiText("");
-    setAiRunning(true);
-
-    try {
-      if (!psiAudit) throw new Error("Run an audit first.");
-      if (!openAiKey.trim()) throw new Error("Enter your OpenAI API key.");
-
-      const res = await fetch(`${API_BASE}/api/recommendations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: openAiKey.trim(), audit: psiAudit }),
-      });
-
-      const text = await res.text();
-      let json;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        json = null;
-      }
-
-      if (!res.ok) throw new Error(json?.error || text || "OpenAI request failed");
-
-      setAiText(json?.recommendations || "No recommendations returned.");
-      setActiveTab("ai");
-    } catch (e) {
-      setError(e?.message || String(e));
-    } finally {
-      setAiRunning(false);
-    }
+  // Only switch to AI tab after a successful response.
+  async function handleRecommendations() {
+    const ok = await getRecommendations(psiAudit);
+    if (ok) setActiveTab("ai");
   }
-
-  const hasAnyAudit = Boolean(psiAudit || domAudit);
 
   return (
     <div className="container">
       <h1 className="h1">Site Health Dashboard</h1>
+
       <p className="subtle">
-        Locked to audit: <span className="badge">{TARGET_URL}</span>
+        Auditing: <span className="badge">{targetUrl}</span>
       </p>
 
       <div className="panel">
         <div className="grid2">
           <div>
             <label className="label">Target URL</label>
-            <input className="input" value={TARGET_URL} readOnly />
+            <input
+              className="input"
+              value={targetUrl}
+              onChange={e => setTargetUrl(e.target.value)}
+              placeholder="https://example.com"
+              type="url"
+              autoComplete="off"
+            />
           </div>
 
           <div>
             <label className="label">Actions</label>
             <div className="row">
-              <button className="btn" onClick={runAudit} disabled={isRunning}>
+              <button className="btn" onClick={handleRunAudit} disabled={isRunning}>
                 {isRunning ? "Running audit…" : "Run audit"}
               </button>
               <span className="badge">Status: {status}</span>
@@ -228,86 +190,11 @@ export default function App() {
           <div className="panel" style={{ marginTop: 12 }}>
             <div className="tabsLayout">
               {/* LEFT: Categories */}
-              <div className="tabsNav" role="tablist" aria-label="Audit detail tabs">
-                <div className="tabsNavTitle">Categories</div>
-
-                <button
-                  type="button"
-                  className={`tabsNavBtn ${activeTab === "crux" ? "isActive" : ""}`}
-                  role="tab"
-                  aria-selected={activeTab === "crux"}
-                  onClick={() => setActiveTab("crux")}
-                >
-                  Real user data (CrUX)
-                  <span className="tabsNavChevron" aria-hidden="true">
-                    ›
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`tabsNavBtn ${activeTab === "opps" ? "isActive" : ""}`}
-                  role="tab"
-                  aria-selected={activeTab === "opps"}
-                  onClick={() => setActiveTab("opps")}
-                >
-                  Top opportunities
-                  <span className="tabsNavChevron" aria-hidden="true">
-                    ›
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`tabsNavBtn ${activeTab === "diag" ? "isActive" : ""}`}
-                  role="tab"
-                  aria-selected={activeTab === "diag"}
-                  onClick={() => setActiveTab("diag")}
-                >
-                  Diagnostics
-                  <span className="tabsNavChevron" aria-hidden="true">
-                    ›
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`tabsNavBtn ${activeTab === "ai" ? "isActive" : ""}`}
-                  role="tab"
-                  aria-selected={activeTab === "ai"}
-                  onClick={() => setActiveTab("ai")}
-                >
-                  AI recommendations
-                  <span className="tabsNavChevron" aria-hidden="true">
-                    ›
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  className={`tabsNavBtn ${activeTab === "asp" ? "isActive" : ""}`}
-                  role="tab"
-                  aria-selected={activeTab === "asp"}
-                  onClick={() => setActiveTab("asp")}
-                >
-                  ASP recommendations
-                  <span className="tabsNavChevron" aria-hidden="true">
-                    ›
-                  </span>
-                </button>
-              </div>
+              <TabsNav activeTab={activeTab} onSelect={setActiveTab} />
 
               {/* RIGHT: Content */}
               <div className="tabsContent" role="region" aria-label="Tab content">
-                <div className="tabsContentHeader">
-                  <h2 className="tabsContentTitle">
-                    {activeTab === "crux" && "Real user data (CrUX)"}
-                    {activeTab === "opps" && "Top opportunities"}
-                    {activeTab === "diag" && "Diagnostics"}
-                    {activeTab === "ai" && "AI recommendations"}
-                    {activeTab === "asp" && "ASP recommendations"}
-                  </h2>
-                </div>
+                <TabsContentHeader activeTab={activeTab} />
 
                 <div className="tabsContentBody">
                   {activeTab === "crux" ? (
@@ -412,15 +299,83 @@ export default function App() {
                         <div>
                           <label className="label">Actions</label>
                           <div className="row">
-                            <button className="btn" onClick={getRecommendations} disabled={aiRunning}>
+                            <button className="btn" onClick={handleRecommendations} disabled={aiRunning}>
                               {aiRunning ? "Generating…" : "Generate recommendations"}
                             </button>
                           </div>
                         </div>
                       </div>
 
+                      {/* Keywords area */}
+                      {extracted || suggestedKeywords.length ? (
+                        <div className="panel" style={{ marginTop: 12 }}>
+                          <h3 style={{ margin: "0 0 8px" }}>Keyword suggestions</h3>
+
+                          <div style={{ display: "grid", gap: 14 }}>
+                            {/* CURRENT */}
+                            <div>
+                              <div className="subtle" style={{ marginBottom: 6 }}>Current page metadata</div>
+
+                              <div style={{ display: "grid", gap: 8 }}>
+                                <div>
+                                  <span className="subtle">Title:</span>{" "}
+                                  {extracted?.title ? (
+                                    <span className="badge">{extracted.title}</span>
+                                  ) : (
+                                    <span className="subtle">–</span>
+                                  )}
+                                </div>
+
+                                <div>
+                                  <span className="subtle">Meta description:</span>{" "}
+                                  {extracted?.metaDescription ? (
+                                    <span className="badge">{extracted.metaDescription}</span>
+                                  ) : (
+                                    <span className="subtle">–</span>
+                                  )}
+                                </div>
+
+                                <div>
+                                  <div className="subtle" style={{ marginBottom: 6 }}>Meta keywords</div>
+                                  {Array.isArray(extracted?.metaKeywords) && extracted.metaKeywords.length ? (
+                                    <div className="row" style={{ flexWrap: "wrap" }}>
+                                      {extracted.metaKeywords.map((k) => (
+                                        <span key={k} className="badge">{k}</span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <div className="subtle">
+                                      None found on the page. (That’s normal, most sites don’t use meta keywords now.)
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* NEW */}
+                            <div>
+                              <div className="subtle" style={{ marginBottom: 6 }}>New keyword ideas</div>
+
+                              {suggestedKeywords.length ? (
+                                <div className="row" style={{ flexWrap: "wrap" }}>
+                                  {suggestedKeywords.map((k) => (
+                                    <span key={k} className="badge">{k}</span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="subtle">
+                                  Not generated yet. Make sure your API returns <span className="badge">suggestedKeywords</span> or that the AI
+                                  output contains a line like <span className="badge">Suggested keywords: a, b, c</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+
                       {aiText ? (
                         <div style={{ marginTop: 10 }}>
+                          <h3 style={{ margin: "0 0 8px" }}>AI recommendations</h3>
                           <pre>{aiText}</pre>
                         </div>
                       ) : (
@@ -431,11 +386,56 @@ export default function App() {
                     </>
                   ) : null}
 
+
                   {activeTab === "asp" ? (
                     <>
+                      {domAudit?.asp ? (
+                        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                          <div className="kpi" style={{ textAlign: "left" }}>
+                            <div className="t">ASP score</div>
+                            <div className="row">
+                              <span className="badge">
+                                {domAudit.asp.overall.label} ({domAudit.asp.overall.score}/100)
+                              </span>
+                              <span className="badge">Severity: {domAudit.asp.overall.severity}</span>
+                            </div>
+                          </div>
+
+                          <div className="kpi" style={{ textAlign: "left" }}>
+                            <div className="t">Findings</div>
+                            <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                              {domAudit.asp.findings.map((f) => (
+                                <div key={f.key} className="subtle">
+                                  <strong>{f.label}:</strong> {String(f.value)}{" "}
+                                  {f.severity === "good" ? "✅" : f.severity === "warn" ? "⚠️" : "❌"}
+                                  <div style={{ opacity: 0.9 }}>{f.message}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="kpi" style={{ textAlign: "left" }}>
+                            <div className="t">Recommended actions</div>
+                            {domAudit.asp.recommendations?.length ? (
+                              <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
+                                {domAudit.asp.recommendations.map((r) => (
+                                  <div key={r.key}>
+                                    <div style={{ fontWeight: 600 }}>{r.title}</div>
+                                    <div className="subtle">{r.action}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="subtle" style={{ marginTop: 8 }}>
+                                No priority actions found. Looks tidy. ✅
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : null}
                       {domAudit?.counts?.sections?.breakdown?.length ? (
                         <div className="panel" style={{ marginTop: 12 }}>
-                          <h2 style={{ margin: "0 0 8px" }}>Per-section breakdown</h2>
+                          <h2 style={{ margin: "0 0 8px" }}>Per-Section breakdown</h2>
 
                           <div className="subtle" style={{ marginBottom: 10 }}>
                             Sections found: <span className="badge">{domAudit.counts.sections.total}</span>
@@ -461,10 +461,18 @@ export default function App() {
 
                                   <div className="asp-section__right">
                                     <div className="asp-section__meta">
-                                      <span className="badge">Images {s.images}</span>
-                                      <span className="badge">Videos {s.videos}</span>
-                                      <span className="badge">Iframes {s.iframes}</span>
-                                      <span className="badge">Carousels {s.carousels}</span>
+                                      {s.images > 0 && (
+                                        <span className="badge">Images {s.images}</span>
+                                      )}
+                                      {s.videos > 0 && (
+                                        <span className="badge">Videos {s.videos}</span>
+                                      )}
+                                      {s.iframes > 0 && (
+                                        <span className="badge">Iframes {s.iframes}</span>
+                                      )}
+                                      {s.carousels > 0 && (
+                                        <span className="badge">Carousels {s.carousels}</span>
+                                      )}
                                     </div>
 
                                     <span className="asp-section__chevron" aria-hidden="true" />
@@ -560,51 +568,6 @@ export default function App() {
                       ) : (
                         <div className="subtle">Run the audit to see per-section counts.</div>
                       )}
-
-                      {domAudit?.asp ? (
-                        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-                          <div className="kpi" style={{ textAlign: "left" }}>
-                            <div className="t">ASP score</div>
-                            <div className="row">
-                              <span className="badge">
-                                {domAudit.asp.overall.label} ({domAudit.asp.overall.score}/100)
-                              </span>
-                              <span className="badge">Severity: {domAudit.asp.overall.severity}</span>
-                            </div>
-                          </div>
-
-                          <div className="kpi" style={{ textAlign: "left" }}>
-                            <div className="t">Findings</div>
-                            <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-                              {domAudit.asp.findings.map((f) => (
-                                <div key={f.key} className="subtle">
-                                  <strong>{f.label}:</strong> {String(f.value)}{" "}
-                                  {f.severity === "good" ? "✅" : f.severity === "warn" ? "⚠️" : "❌"}
-                                  <div style={{ opacity: 0.9 }}>{f.message}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div className="kpi" style={{ textAlign: "left" }}>
-                            <div className="t">Recommended actions</div>
-                            {domAudit.asp.recommendations?.length ? (
-                              <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
-                                {domAudit.asp.recommendations.map((r) => (
-                                  <div key={r.key}>
-                                    <div style={{ fontWeight: 600 }}>{r.title}</div>
-                                    <div className="subtle">{r.action}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="subtle" style={{ marginTop: 8 }}>
-                                No priority actions found. Looks tidy. ✅
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ) : null}
                     </>
                   ) : null}
                 </div>

@@ -25,8 +25,7 @@ const ALLOWED_ORIGINS = [
 ];
 
 const PORT = process.env.PORT || 8787;
-const TARGET_URL =
-  "https://www.icegaming.com/";
+const TARGET_URL = process.env.TARGET_URL || "";
 
 app.use(
   cors({
@@ -243,8 +242,19 @@ app.get("/api/audit", async (req, res) => {
     const key = process.env.PSI_API_KEY;
     if (!key) return res.status(500).json({ error: "Missing PSI_API_KEY env var" });
 
+    const target = (req.query.url || TARGET_URL || "").toString();
+    let parsed;
+    try {
+      parsed = new URL(target);
+    } catch {
+      return res.status(400).json({ error: "Invalid url" });
+    }
+    if (!parsed.protocol.startsWith("http")) {
+      return res.status(400).json({ error: "URL must be http/https" });
+    }
+
     const url = new URL("https://www.googleapis.com/pagespeedonline/v5/runPagespeed");
-    url.searchParams.set("url", TARGET_URL);
+    url.searchParams.set("url", target);
     url.searchParams.set("key", key);
     url.searchParams.set("strategy", "desktop");
     url.searchParams.append("category", "performance");
@@ -274,7 +284,7 @@ app.get("/api/audit", async (req, res) => {
     }
 
     res.json({
-      targetUrl: TARGET_URL,
+      targetUrl: target,
       requestedUrl: lhr?.requestedUrl,
       finalUrl: lhr?.finalUrl,
       fetchTime: lhr?.fetchTime,
@@ -282,12 +292,10 @@ app.get("/api/audit", async (req, res) => {
       metrics: pickLabMetrics(lhr),
       fieldData: pickFieldData(data),
       opportunities: pickOpportunities(lhr, 8),
-      diagnostics: pickDiagnostics(lhr),
     });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
   }
-
 });
 
 async function getRenderedAspCounts(targetUrl) {
@@ -623,6 +631,288 @@ async function getRenderedAspCounts(targetUrl) {
   }
 }
 
+app.post("/api/recommendations", async (req, res) => {
+  try {
+    const { apiKey, audit } = req.body || {};
+    if (!apiKey || typeof apiKey !== "string") {
+      return res.status(400).json({ error: "Missing or invalid apiKey" });
+    }
+    if (!audit) {
+      return res.status(400).json({ error: "Missing audit data" });
+    }
+
+    const pageUrl =
+      audit.finalUrl || audit.targetUrl || audit.requestedUrl || audit.url;
+
+    if (!pageUrl) {
+      return res.status(400).json({ error: "Audit payload missing a URL" });
+    }
+
+    // Fetch HTML + extract meta + sample content
+    const html = await fetchPageHtml(pageUrl);
+    const pageMeta = extractPageMetaAndContent(html);
+
+    // Keep audit summary small (avoid token limit errors)
+    const auditSummary = {
+      url: pageUrl,
+      scores: audit.scores,
+      metrics: audit.metrics,
+      fieldData: audit.fieldData
+        ? {
+            id: audit.fieldData.id ?? null,
+            lcp: audit.fieldData.lcp
+              ? { percentile: audit.fieldData.lcp.percentile ?? null, category: audit.fieldData.lcp.category ?? null }
+              : null,
+            inp: audit.fieldData.inp
+              ? { percentile: audit.fieldData.inp.percentile ?? null, category: audit.fieldData.inp.category ?? null }
+              : null,
+            cls: audit.fieldData.cls
+              ? { percentile: audit.fieldData.cls.percentile ?? null, category: audit.fieldData.cls.category ?? null }
+              : null,
+          }
+        : null,
+      opportunities: Array.isArray(audit.opportunities)
+        ? audit.opportunities
+            .slice()
+            .sort((a, b) => (b?.savingsMs || 0) - (a?.savingsMs || 0))
+            .slice(0, 6)
+            .map((o) => ({ id: o.id, title: o.title, savingsMs: o.savingsMs ?? null }))
+        : [],
+      diagnostics: audit.diagnostics
+        ? {
+            totalByteWeight: audit.diagnostics.totalByteWeight ?? null,
+          }
+        : null,
+    };
+
+    const openaiRes = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        input: [
+          {
+            role: "system",
+            content:
+              "You are a SEO + web performance + accessibility auditor. Use British spellings. Be specific and practical.",
+          },
+          {
+            role: "user",
+            content:
+              "Given (1) audit summary JSON and (2) page metadata/content sample, produce:\n" +
+              "A) Performance/accessibility recommendations (top 8)\n" +
+              "B) Keyword recommendations:\n" +
+              "   - Existing keywords (if any): comment briefly\n" +
+              "   - 12-18 new/expanded keyword suggestions based on the content\n" +
+              "   - Group into clusters (e.g. brand, product, intent, long-tail)\n" +
+              "   - End with EXACTLY this line format:\n" +
+              "     Suggested keywords: kw1, kw2, kw3\n" +
+              "C) Optional: improved meta title + meta description suggestions (1 each)\n\n" +
+              "Constraints:\n" +
+              "- Do not invent facts not implied by the content sample/headings.\n" +
+              "- Avoid keyword stuffing.\n\n" +
+              `AUDIT:\n${JSON.stringify(auditSummary)}\n\n` +
+              `PAGE_META_AND_CONTENT:\n${JSON.stringify(pageMeta)}`,
+          },
+        ],
+      }),
+    });
+
+    const raw = await openaiRes.text();
+    if (!openaiRes.ok) return res.status(openaiRes.status).send(raw);
+
+    const json = JSON.parse(raw);
+    const text = (json.output || [])
+      .flatMap((o) => o.content || [])
+      .filter((c) => c.type === "output_text")
+      .map((c) => c.text)
+      .join("\n")
+      .trim();
+
+      const suggestedKeywords = parseSuggestedKeywords(text);
+
+      return res.json({
+        recommendations: text || "No recommendations returned.",
+        extracted: pageMeta,
+        suggestedKeywords,
+      });
+  } catch (e) {
+    return res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+
+// helper functions
+
+function parseSuggestedKeywords(text) {
+  if (!text) return [];
+  const m = text.match(/(?:\*{0,2}\s*)?suggested keywords(?:\s*\*{0,2})?\s*[:\-]\s*(.+)/i);
+  const line = (m?.[1] || "").trim();
+  if (!line) return [];
+  return line.split(",").map(s => s.trim()).filter(Boolean).slice(0, 30);
+}
+
+async function fetchPageHtml(url, { timeoutMs = 20000 } = {}) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, {
+      signal: ac.signal,
+      headers: {
+        // helps avoid some bot blocks
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+      },
+    });
+    if (!r.ok) throw new Error(`Failed to fetch HTML: ${r.status} ${r.statusText}`);
+    return await r.text();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function normaliseSpace(s) {
+  return (s || "").replace(/\s+/g, " ").trim();
+}
+
+function clip(s, max = 1800) {
+  const t = normaliseSpace(s);
+  return t.length > max ? t.slice(0, max - 1) + "…" : t;
+}
+
+function extractPageMetaAndContent(html) {
+  const $ = load(html);
+
+  const title = normaliseSpace($("title").first().text());
+
+  const metaDescription = normaliseSpace(
+    $('meta[name="description"]').attr("content") || ""
+  );
+
+  const metaKeywordsRaw = normaliseSpace(
+    $('meta[name="keywords"]').attr("content") || ""
+  );
+
+  const metaKeywords = metaKeywordsRaw
+    ? metaKeywordsRaw
+        .split(",")
+        .map((k) => normaliseSpace(k))
+        .filter(Boolean)
+        .slice(0, 40)
+    : [];
+
+  const h1 = normaliseSpace($("h1").first().text());
+  const h2s = $("h2")
+    .slice(0, 12)
+    .map((_, el) => normaliseSpace($(el).text()))
+    .get()
+    .filter(Boolean);
+
+  // Remove obvious junk before sampling text
+  $("script, style, noscript, svg, iframe").remove();
+
+  // Prefer main content if available
+  const $main = $("main").first().length ? $("main").first() : $("body");
+
+  // Grab a reasonable amount of page text (avoid token explosions)
+  const bodyText = clip($main.text(), 2200);
+
+  return {
+    title,
+    metaDescription,
+    metaKeywords,
+    headings: {
+      h1: h1 || null,
+      h2: h2s,
+    },
+    contentSample: bodyText || null,
+    notes: {
+      hasMetaKeywords: metaKeywords.length > 0,
+    },
+  };
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function makeFinding({ key, label, value, severity, points, message, threshold }) {
+  return { key, label, value, severity, points, message, threshold };
+}
+
+function minimiseAuditForAI(audit) {
+  const opps = Array.isArray(audit.opportunities) ? audit.opportunities : [];
+
+  return {
+    url: audit.finalUrl || audit.targetUrl || audit.requestedUrl || null,
+
+    // small + useful
+    scores: audit.scores || null,
+    metrics: audit.metrics || null,
+
+    // keep only percentiles/categories, ditch distributions
+    fieldData: audit.fieldData
+      ? {
+          id: audit.fieldData.id ?? null,
+          lcp: pickFieldMetric(audit.fieldData.lcp),
+          inp: pickFieldMetric(audit.fieldData.inp),
+          cls: pickFieldMetric(audit.fieldData.cls),
+          ttfb: pickFieldMetric(audit.fieldData.ttfb),
+        }
+      : null,
+
+    // keep top opportunities only
+    opportunities: opps
+      .slice()
+      .sort((a, b) => (b?.savingsMs || 0) - (a?.savingsMs || 0))
+      .slice(0, 6)
+      .map((o) => ({
+        id: o.id,
+        title: o.title,
+        savingsMs: o.savingsMs ?? null,
+      })),
+
+    // diagnostics: keep tiny headline numbers only (no giant tables)
+    diagnostics: audit.diagnostics
+      ? {
+          totalByteWeight: audit.diagnostics.totalByteWeight ?? null,
+          // optionally add dom-size numeric if you can extract it
+          domSizeSummary: summariseDomSize(audit.diagnostics.domSize),
+        }
+      : null,
+  };
+}
+
+function pickFieldMetric(m) {
+  if (!m) return null;
+  return {
+    percentile: m.percentile ?? null,
+    category: m.category ?? null,
+  };
+}
+
+function summariseDomSize(domSizeDetails) {
+  // Lighthouse dom-size details are usually a table-like structure
+  // Keep it tiny to avoid token bloat.
+  try {
+    const items = domSizeDetails?.items || domSizeDetails?.details?.items;
+    const first = Array.isArray(items) ? items[0] : null;
+    // best-effort: return a compact object if present
+    if (first && typeof first === "object") {
+      return {
+        totalElements: first.totalElements ?? null,
+        depth: first.maxDepth ?? null,
+        width: first.maxChildren ?? null,
+      };
+    }
+  } catch {}
+  return null;
+}
+
 app.get("/api/asp-recommendations", async (req, res) => {
   try {
     const target = (req.query.url || TARGET_URL || "").toString();
@@ -791,22 +1081,6 @@ function severityFromScore(score) {
   return "bad";
 }
 
-function clamp(n, min, max) {
-  return Math.max(min, Math.min(max, n));
-}
-
-function makeFinding({ key, label, value, severity, points, message, threshold }) {
-  return { key, label, value, severity, points, message, threshold };
-}
-
-/**
- * Scoring philosophy:
- * - Start at 100
- * - Deduct points for excessive usage
- * - Return score (0-100), plus findings & recs
- *
- * Adjust thresholds anytime.
- */
 function scoreAspCounts(counts) {
   const findings = [];
   let score = 100;
@@ -1218,4 +1492,3 @@ app.use((req, res) => {
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Audit server listening on ${PORT}`);
 });
-
