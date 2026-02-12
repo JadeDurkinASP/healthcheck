@@ -436,7 +436,10 @@ async function getRenderedAspCounts(targetUrl) {
       // SECTION-BY-SECTION BREAKDOWN
       // -----------------------------
       const main = document.querySelector("main") || document;
-      const sectionEls = qsa("main .section");
+
+      // Count both `.section` and `.p-section`, scoped to main if present
+      const SECTION_SEL = ".section, .p-section";
+      const sectionEls = qsa(SECTION_SEL, main);
 
       const sectionBreakdown = sectionEls.map((section, i) => {
         const images = qsa("img", section).length;
@@ -1043,7 +1046,7 @@ function countChildren($, parentSel, childSel) {
 function buildAspPerfCounts(html) {
   const $ = load(html);
 
-  const sections = $(".section").length;
+  const sections = $(".section, .p-section").length;
 
 // 2) Carousels: .w-icatcher-slider
 // Count REAL slides per carousel (ignore slick-cloned)
