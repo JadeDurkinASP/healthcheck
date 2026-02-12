@@ -531,10 +531,6 @@ export default function App() {
                                             <span className="badge badge--muted">.p-article {s.pArticles}</span>
                                           )}
                                         </div>
-
-                                        <div className="subtle" style={{ marginTop: 8 }}>
-                                          Total is de-duped to avoid counting <span className="badge badge--soft">&lt;article class="p-article"&gt;</span> twice.
-                                        </div>
                                       </div>
                                     )}
 
