@@ -344,6 +344,7 @@ async function getRenderedAspCounts(targetUrl) {
         const aspRoots = [
           ...qsa(".w-icatcher-slider", scope),
           ...qsa(".w-testimonials", scope),
+          ...qsa(".w-carousel", scope),
         ];
 
         const isInsideAspRoot = (el) => aspRoots.some((wrap) => wrap !== el && wrap.contains(el));
@@ -364,7 +365,10 @@ async function getRenderedAspCounts(targetUrl) {
         // -----------------------
         // 1) ASP icatcher (Slick)
         // -----------------------
-        if (rootEl.classList.contains("w-icatcher-slider")) {
+        if (
+          rootEl.classList.contains("w-icatcher-slider") ||
+          rootEl.classList.contains("w-carousel")
+        ) {
           // Prefer original items rather than slick’s generated structure
           const items = qsa(".w-icatcher-slider__list__item:not(.slick-cloned)", rootEl);
           if (items.length) return items.length;
@@ -424,7 +428,11 @@ async function getRenderedAspCounts(targetUrl) {
       };
 
     const detectCarouselType = (rootEl) => {
-      if (rootEl.classList.contains("w-icatcher-slider")) return "slick";
+      if (
+        rootEl.classList.contains("w-icatcher-slider") ||
+        rootEl.classList.contains("w-carousel")
+      ) return "slick";
+
       if (rootEl.classList.contains("w-testimonials")) return "swiper";
       if (rootEl.querySelector(".slick-track")) return "slick";
       if (rootEl.querySelector(".swiper-wrapper")) return "swiper";
