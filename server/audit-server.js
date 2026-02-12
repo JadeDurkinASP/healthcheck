@@ -454,55 +454,67 @@ async function getRenderedAspCounts(targetUrl) {
         const videos = qsa("video", section).length;
         const iframes = qsa("iframe", section).length;
 
+        const articleTags = qsa("article", section).length;
+        const pArticles = qsa(".p-article", section).length;
+
+        const uniqueArticles = new Set([
+        ...qsa("article", section),
+        ...qsa(".p-article", section),
+        ]).size;
+
         // Collect image URLs in this section (unique)
         const imageUrlsSet = new Set();
 
         qsa("img", section).forEach((img) => {
-          // currentSrc is best (accounts for srcset selection)
-          const src = img.currentSrc || img.src || img.getAttribute("src");
-          if (src) imageUrlsSet.add(src);
+        const src = img.currentSrc || img.src || img.getAttribute("src");
+        if (src) imageUrlsSet.add(src);
         });
 
-        // Also consider <source srcset> inside <picture> (optional, helps)
         qsa("source[srcset]", section).forEach((source) => {
-          const srcset = source.getAttribute("srcset");
-          if (!srcset) return;
+        const srcset = source.getAttribute("srcset");
+        if (!srcset) return;
 
-          // pick the last candidate (often biggest)
-          const last = srcset
-            .split(",")
-            .map((s) => s.trim().split(" ")[0])
-            .filter(Boolean)
-            .pop();
+        const last = srcset
+          .split(",")
+          .map((s) => s.trim().split(" ")[0])
+          .filter(Boolean)
+          .pop();
 
-          if (last) imageUrlsSet.add(last);
+        if (last) imageUrlsSet.add(last);
         });
 
-        const imageUrls = Array.from(imageUrlsSet).slice(0, 60); // cap to avoid massive payloads
+        const imageUrls = Array.from(imageUrlsSet).slice(0, 60);
 
         const carouselsInSection = getCarouselRoots(section);
 
         const carouselBreakdown = carouselsInSection.map((c, idx) => ({
-          index: idx + 1,
-          type: detectCarouselType(c),
-          slides: countSlidesInCarousel(c),
+        index: idx + 1,
+        type: detectCarouselType(c),
+        slides: countSlidesInCarousel(c),
         }));
 
         const carouselSlidesInSection = carouselBreakdown.reduce((sum, c) => sum + c.slides, 0);
 
         return {
-          index: i + 1,
-          id: section.id || null,
-          classes: section.className || null,
-          images,
-          videos,
-          iframes,
-          imageUrls,
-          carousels: carouselsInSection.length,
+        index: i + 1,
+        id: section.id || null,
+        classes: section.className || null,
+        images,
+        videos,
+        iframes,
+
+        // ✅ NEW: article counts
+        articleTags,       // raw <article> count
+        pArticles,         // raw .p-article count
+        articles: uniqueArticles, // de-duped combined count (recommended for scoring/UI)
+
+        imageUrls,
+        carousels: carouselsInSection.length,
           carouselSlides: carouselSlidesInSection,
           carouselBreakdown,
         };
       });
+
 
       // -----------------------------
       // GLOBAL TOTALS (your original shape, plus sections breakdown)

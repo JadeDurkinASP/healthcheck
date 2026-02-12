@@ -498,18 +498,11 @@ export default function App() {
 
                                   <div className="asp-section__right">
                                     <div className="asp-section__meta">
-                                      {s.images > 0 && (
-                                        <span className="badge">Images {s.images}</span>
-                                      )}
-                                      {s.videos > 0 && (
-                                        <span className="badge">Videos {s.videos}</span>
-                                      )}
-                                      {s.iframes > 0 && (
-                                        <span className="badge">Iframes {s.iframes}</span>
-                                      )}
-                                      {s.carousels > 0 && (
-                                        <span className="badge">Carousels {s.carousels}</span>
-                                      )}
+                                      {s.images > 0 && <span className="badge">Images {s.images}</span>}
+                                      {s.videos > 0 && <span className="badge">Videos {s.videos}</span>}
+                                      {s.iframes > 0 && <span className="badge">Iframes {s.iframes}</span>}
+                                      {(s.articles ?? 0) > 0 && <span className="badge">Articles {s.articles}</span>}
+                                      {s.carousels > 0 && <span className="badge">Carousels {s.carousels}</span>}
                                     </div>
 
                                     <span className="asp-section__chevron" aria-hidden="true" />
@@ -518,6 +511,32 @@ export default function App() {
 
                                 <div style={{ padding: 12, display: "grid", gap: 10 }}>
                                   <div className="grid2">
+
+                                    {(s.articles ?? 0) > 0 && (
+                                      <div className="kpi" style={{ textAlign: "left" }}>
+                                        <h3 className="t">Articles</h3>
+
+                                        <div className="asp-carousel-total" style={{ marginBottom: 10 }}>
+                                          <span className="subtle">Total</span>
+                                          <span className="badge">
+                                            {s.articles} article{s.articles !== 1 ? "s" : ""}
+                                          </span>
+                                        </div>
+
+                                        <div className="row" style={{ flexWrap: "wrap" }}>
+                                          {(s.articleTags ?? 0) > 0 && (
+                                            <span className="badge badge--muted">&lt;article&gt; {s.articleTags}</span>
+                                          )}
+                                          {(s.pArticles ?? 0) > 0 && (
+                                            <span className="badge badge--muted">.p-article {s.pArticles}</span>
+                                          )}
+                                        </div>
+
+                                        <div className="subtle" style={{ marginTop: 8 }}>
+                                          Total is de-duped to avoid counting <span className="badge badge--soft">&lt;article class="p-article"&gt;</span> twice.
+                                        </div>
+                                      </div>
+                                    )}
 
                                     {s.images > 0 && (
                                       <div className="kpi" style={{ textAlign: "left" }}>
