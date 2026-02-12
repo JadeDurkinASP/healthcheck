@@ -424,7 +424,6 @@ export default function App() {
                     </>
                   ) : null}
 
-
                   {activeTab === "asp" ? (
                     <>
                       {domAudit?.asp ? (
